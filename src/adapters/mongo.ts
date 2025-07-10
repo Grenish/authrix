@@ -1,10 +1,10 @@
 import type { AuthDbAdapter, AuthUser } from "../types/db";
 import { MongoClient, ObjectId, Collection } from "mongodb";
 
-// Read from environment or fallback (DEV only)
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017";
-const DB_NAME = process.env.DB_NAME || "auth";
-const COLLECTION_NAME = process.env.AUTH_COLLECTION || "users";
+// Read from environment
+const MONGO_URI = process.env.MONGO_URI;
+const DB_NAME = process.env.DB_NAME;
+const COLLECTION_NAME = process.env.AUTH_COLLECTION;
 
 let client: MongoClient;
 let users: Collection;
@@ -12,6 +12,9 @@ let isInitialized = false;
 
 async function initMongoConnection() {
   if (!isInitialized) {
+    if (!MONGO_URI || !DB_NAME || !COLLECTION_NAME) {
+      throw new Error('Missing required environment variables: MONGO_URI, DB_NAME, AUTH_COLLECTION');
+    }
     client = new MongoClient(MONGO_URI);
     await client.connect();
     users = client.db(DB_NAME).collection(COLLECTION_NAME);

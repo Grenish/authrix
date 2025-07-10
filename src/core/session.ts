@@ -2,10 +2,9 @@ import type { Request } from "express";
 import { authConfig } from "../config";
 import { verifyToken } from "../tokens/verifyToken";
 
-export async function getCurrentUser(req: Request) {
+// Framework-agnostic function to get current user from token
+export async function getCurrentUserFromToken(token: string | null) {
   try {
-    const token = req.cookies[authConfig.cookieName];
-    
     if (!token) {
       return null;
     }
@@ -34,6 +33,19 @@ export async function getCurrentUser(req: Request) {
   }
 }
 
+// Express.js specific function for backward compatibility
+export async function getCurrentUser(req: Request) {
+  const token = req.cookies[authConfig.cookieName];
+  return getCurrentUserFromToken(token);
+}
+
+// Framework-agnostic function to check if token is valid
+export async function isTokenValid(token: string | null): Promise<boolean> {
+  const user = await getCurrentUserFromToken(token);
+  return user !== null;
+}
+
+// Express.js specific function for backward compatibility
 export async function isAuthenticated(req: Request): Promise<boolean> {
   const user = await getCurrentUser(req);
   return user !== null;

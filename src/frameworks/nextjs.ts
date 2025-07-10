@@ -1,10 +1,31 @@
-// Next.js types are optional dependencies - they will be available when used in Next.js projects
-// @ts-ignore
-import type { NextRequest, NextResponse } from "next/server";
-// @ts-ignore
-import type { NextApiRequest, NextApiResponse } from "next";
-// @ts-ignore
-import { cookies } from "next/headers";
+// Next.js utilities for Authrix
+// These imports are optional and will only work when Next.js is available
+
+let NextRequest: any, NextResponse: any, NextApiRequest: any, NextApiResponse: any, cookies: any;
+
+try {
+  // Dynamic imports to handle cases where Next.js is not installed
+  const nextServer = require("next/server");
+  NextRequest = nextServer.NextRequest;
+  NextResponse = nextServer.NextResponse;
+} catch (error) {
+  // Next.js server components not available
+}
+
+try {
+  const next = require("next");
+  NextApiRequest = next.NextApiRequest;
+  NextApiResponse = next.NextApiResponse;
+} catch (error) {
+  // Next.js not available
+}
+
+try {
+  const nextHeaders = require("next/headers");
+  cookies = nextHeaders.cookies;
+} catch (error) {
+  // Next.js headers not available
+}
 
 import { signupCore } from "../core/signup";
 import { signinCore } from "../core/signin";
@@ -12,12 +33,21 @@ import { logoutCore } from "../core/logout";
 import { getCurrentUserFromToken, isTokenValid } from "../core/session";
 import { authConfig } from "../config";
 
+// Helper function to check if Next.js is available
+function ensureNextJs(feature: string) {
+  if (!cookies) {
+    throw new Error(`${feature} requires Next.js to be installed. Please install Next.js: npm install next`);
+  }
+}
+
 // Next.js App Router utilities
 
 /**
  * Sign up a user in Next.js App Router
  */
 export async function signupNextApp(email: string, password: string) {
+  ensureNextJs("signupNextApp");
+  
   const result = await signupCore(email, password);
   
   // Set cookie using Next.js cookies() function
@@ -31,6 +61,8 @@ export async function signupNextApp(email: string, password: string) {
  * Sign in a user in Next.js App Router
  */
 export async function signinNextApp(email: string, password: string) {
+  ensureNextJs("signinNextApp");
+  
   const result = await signinCore(email, password);
   
   // Set cookie using Next.js cookies() function
@@ -44,6 +76,8 @@ export async function signinNextApp(email: string, password: string) {
  * Log out a user in Next.js App Router
  */
 export function logoutNextApp() {
+  ensureNextJs("logoutNextApp");
+  
   const result = logoutCore();
   
   // Clear cookie using Next.js cookies() function
@@ -57,6 +91,8 @@ export function logoutNextApp() {
  * Get current user in Next.js App Router
  */
 export async function getCurrentUserNextApp() {
+  ensureNextJs("getCurrentUserNextApp");
+  
   const cookieStore = cookies();
   const token = cookieStore.get(authConfig.cookieName)?.value || null;
   return getCurrentUserFromToken(token);
@@ -66,6 +102,8 @@ export async function getCurrentUserNextApp() {
  * Check if user is authenticated in Next.js App Router
  */
 export async function isAuthenticatedNextApp(): Promise<boolean> {
+  ensureNextJs("isAuthenticatedNextApp");
+  
   const cookieStore = cookies();
   const token = cookieStore.get(authConfig.cookieName)?.value || null;
   return isTokenValid(token);
@@ -76,7 +114,7 @@ export async function isAuthenticatedNextApp(): Promise<boolean> {
 /**
  * Sign up a user in Next.js Pages Router API
  */
-export async function signupNextPages(email: string, password: string, res: NextApiResponse) {
+export async function signupNextPages(email: string, password: string, res: any) {
   const result = await signupCore(email, password);
   
   // Set cookie using Next.js API response
@@ -93,7 +131,7 @@ export async function signupNextPages(email: string, password: string, res: Next
 /**
  * Sign in a user in Next.js Pages Router API
  */
-export async function signinNextPages(email: string, password: string, res: NextApiResponse) {
+export async function signinNextPages(email: string, password: string, res: any) {
   const result = await signinCore(email, password);
   
   // Set cookie using Next.js API response
@@ -110,7 +148,7 @@ export async function signinNextPages(email: string, password: string, res: Next
 /**
  * Log out a user in Next.js Pages Router API
  */
-export function logoutNextPages(res: NextApiResponse) {
+export function logoutNextPages(res: any) {
   const result = logoutCore();
   
   // Clear cookie using Next.js API response
@@ -127,7 +165,7 @@ export function logoutNextPages(res: NextApiResponse) {
 /**
  * Get current user in Next.js Pages Router API
  */
-export async function getCurrentUserNextPages(req: NextApiRequest) {
+export async function getCurrentUserNextPages(req: any) {
   const token = req.cookies[authConfig.cookieName] || null;
   return getCurrentUserFromToken(token);
 }
@@ -135,7 +173,7 @@ export async function getCurrentUserNextPages(req: NextApiRequest) {
 /**
  * Check if user is authenticated in Next.js Pages Router API
  */
-export async function isAuthenticatedNextPages(req: NextApiRequest): Promise<boolean> {
+export async function isAuthenticatedNextPages(req: any): Promise<boolean> {
   const token = req.cookies[authConfig.cookieName] || null;
   return isTokenValid(token);
 }
@@ -145,7 +183,7 @@ export async function isAuthenticatedNextPages(req: NextApiRequest): Promise<boo
 /**
  * Check authentication in Next.js middleware
  */
-export async function checkAuthMiddleware(request: NextRequest) {
+export async function checkAuthMiddleware(request: any) {
   const token = request.cookies.get(authConfig.cookieName)?.value || null;
   const isValid = await isTokenValid(token);
   
@@ -159,7 +197,7 @@ export async function checkAuthMiddleware(request: NextRequest) {
  * Create an authenticated NextResponse with user info
  */
 export function createAuthenticatedResponse(
-  response: NextResponse,
+  response: any,
   user: { id: string; email: string; createdAt?: Date }
 ) {
   // Add user info to response headers for downstream consumption
@@ -169,7 +207,7 @@ export function createAuthenticatedResponse(
 }
 
 // Higher-order function for protecting Next.js API routes
-export function withAuth<T extends NextApiRequest, U extends NextApiResponse>(
+export function withAuth<T extends Record<string, any>, U extends Record<string, any>>(
   handler: (req: T & { user: { id: string; email: string; createdAt?: Date } }, res: U) => Promise<void> | void
 ) {
   return async (req: T, res: U) => {
@@ -177,7 +215,7 @@ export function withAuth<T extends NextApiRequest, U extends NextApiResponse>(
       const user = await getCurrentUserNextPages(req);
       
       if (!user) {
-        return res.status(401).json({ 
+        return (res as any).status(401).json({ 
           success: false, 
           error: { message: "Authentication required" }
         });
@@ -189,7 +227,7 @@ export function withAuth<T extends NextApiRequest, U extends NextApiResponse>(
       return handler(req as T & { user: typeof user }, res);
     } catch (error) {
       console.error("Authentication error:", error);
-      return res.status(500).json({ 
+      return (res as any).status(500).json({ 
         success: false, 
         error: { message: "Authentication failed" }
       });

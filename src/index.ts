@@ -1,12 +1,13 @@
 // --- Core Authentication Functions ---
-export { signup } from "./core/signup";
-export { signin } from "./core/signin";
-export { logout } from "./core/logout";
-export { getCurrentUser, isAuthenticated } from "./core/session";
+export { signup, signupCore } from "./core/signup";
+export { signin, signinCore } from "./core/signin";
+export { logout, logoutCore } from "./core/logout";
+export { getCurrentUser, getCurrentUserFromToken, isAuthenticated, isTokenValid } from "./core/session";
 
 // --- Middleware ---
 export { requireAuth } from "./core/requireAuth";
 export { authMiddleware } from "./middleware/authMiddleware";
+export { createAuthMiddleware, optionalAuthMiddleware } from "./middleware/flexibleAuth";
 
 // --- Configuration ---
 export { initAuth, authConfig } from "./config/index";
@@ -20,6 +21,56 @@ export { firebaseAdapter } from "./adapters/firebase";
 // --- OAuth Providers ---
 export { getGoogleOAuthURL, handleGoogleCallback } from "./providers/google";
 export { getGitHubOAuthURL, handleGitHubCallback } from "./providers/github";
+
+// --- Framework-Specific Utilities ---
+// Universal (framework-agnostic)
+export { 
+  signupUniversal, 
+  signinUniversal, 
+  logoutUniversal,
+  getCurrentUserUniversal,
+  isTokenValidUniversal,
+  validateAuth,
+  createCookieString,
+  parseCookies,
+  getAuthTokenFromCookies,
+  createAuthHeaders,
+  createAuthError,
+  createAuthSuccess
+} from "./frameworks/universal";
+
+// Next.js utilities
+export {
+  // App Router
+  signupNextApp,
+  signinNextApp,
+  logoutNextApp,
+  getCurrentUserNextApp,
+  isAuthenticatedNextApp,
+  // Pages Router
+  signupNextPages,
+  signinNextPages,
+  logoutNextPages,
+  getCurrentUserNextPages,
+  isAuthenticatedNextPages,
+  // Middleware
+  checkAuthMiddleware,
+  createAuthenticatedResponse,
+  withAuth
+} from "./frameworks/nextjs";
+
+// React utilities  
+export {
+  signupReact,
+  signinReact,
+  logoutReact,
+  getCurrentUserReact,
+  isAuthenticatedReact,
+  getAuthToken,
+  hasAuthToken,
+  createUseAuthToken,
+  withAuthReact
+} from "./frameworks/react";
 
 // --- Error Handling ---
 export { errorHandler } from "./utils/response";
@@ -40,3 +91,4 @@ export { sendSuccess, sendError } from "./utils/response";
 export type { AuthDbAdapter, AuthUser } from "./types/db";
 export type { AuthenticatedRequest } from "./middleware/authMiddleware";
 export type { TokenPayload } from "./tokens/verifyToken";
+export type { AuthResult, LogoutResult, CookieOptions } from "./frameworks/universal";

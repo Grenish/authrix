@@ -1,0 +1,67 @@
+import type { AuthDbAdapter, AuthUser } from "../types/db";
+import { MongoClient, ObjectId, Collection } from "mongodb";
+
+// Read from environment or fallback (DEV only)
+const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017";
+const DB_NAME = process.env.DB_NAME || "auth";
+const COLLECTION_NAME = process.env.AUTH_COLLECTION || "users";
+
+let client: MongoClient;
+let users: Collection;
+
+async function initMongoConnection() {
+  if (!client) {
+    client = new MongoClient(MONGO_URI);
+    await client.connect();
+    users = client.db(DB_NAME).collection(COLLECTION_NAME);
+  }
+}
+
+// Call init immediately
+await initMongoConnection();
+
+export const mongoAdapter: AuthDbAdapter = {
+  async findUserByEmail(email: string): Promise<AuthUser | null> {
+    const user = await users.findOne({ email: email.toLowerCase().trim() });
+    if (!user) return null;
+
+    return {
+      id: user._id.toString(),
+      email: user.email,
+      password: user.password,
+      createdAt: user.createdAt,
+    };
+  },
+
+  async findUserById(id: string): Promise<AuthUser | null> {
+    if (!ObjectId.isValid(id)) return null;
+
+    const user = await users.findOne({ _id: new ObjectId(id) });
+    if (!user) return null;
+
+    return {
+      id: user._id.toString(),
+      email: user.email,
+      password: user.password,
+      createdAt: user.createdAt,
+    };
+  },
+
+  async createUser({ email, password }) {
+    const normalizedEmail = email.toLowerCase().trim();
+    const now = new Date();
+
+    const result = await users.insertOne({
+      email: normalizedEmail,
+      password,
+      createdAt: now,
+    });
+
+    return {
+      id: result.insertedId.toString(),
+      email: normalizedEmail,
+      password,
+      createdAt: now,
+    };
+  },
+};

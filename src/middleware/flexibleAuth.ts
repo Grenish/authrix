@@ -7,7 +7,7 @@ import { authConfig } from "../config";
  * Framework-agnostic authentication middleware
  * Can be used with Express, Fastify, Koa, etc.
  */
-export async function createAuthMiddleware(options: {
+export function createAuthMiddleware(options: {
   required?: boolean; // If true, throws error when not authenticated
   tokenExtractor?: (req: any) => string | null; // Custom token extraction
   errorHandler?: (error: any, req: any, res: any, next?: any) => void; // Custom error handling
@@ -96,26 +96,26 @@ function defaultErrorHandler(error: any, req: any, res: any, next?: any) {
 /**
  * Express.js specific middleware (backward compatibility)
  */
-export async function authMiddleware(
+export function authMiddleware(
   req: Request & { user?: any; auth?: any; isAuthenticated?: boolean },
   res: Response,
   next: NextFunction
-): Promise<void> {
-  const middleware = await createAuthMiddleware({ required: true });
-  return middleware(req, res, next);
+): void {
+  const middleware = createAuthMiddleware({ required: true });
+  middleware(req, res, next);
 }
 
 /**
  * Express.js optional auth middleware
  * Adds user info if available, but doesn't require authentication
  */
-export async function optionalAuthMiddleware(
+export function optionalAuthMiddleware(
   req: Request & { user?: any; auth?: any; isAuthenticated?: boolean },
   res: Response,
   next: NextFunction
-): Promise<void> {
-  const middleware = await createAuthMiddleware({ required: false });
-  return middleware(req, res, next);
+): void {
+  const middleware = createAuthMiddleware({ required: false });
+  middleware(req, res, next);
 }
 
 // Re-export the old interface for backward compatibility

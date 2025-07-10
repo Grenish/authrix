@@ -1,24 +1,43 @@
 {
   "name": "authrix",
   "version": "1.0.0",
-  "main": "./dist/index.js",
+  "description": "Lightweight, flexible authentication library for Node.js and TypeScript.",
+  "author": "Grenish Rai",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsup",
-    "dev": "tsup --watch"
+    "dev": "tsup --watch",
+    "prepare": "npm run build",
+    "prepack": "npm run build",
+    "link:local": "npm run build && npm link",
+    "unlink:local": "npm unlink -g authrix",
+    "test:build": "npm run build && node -e \"console.log('Build test passed')\"",
+    "clean": "rimraf dist"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Grenish/authrix.git"
+    "url": "https://github.com/Grenish/authrix.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
   "bugs": {
     "url": "https://github.com/Grenish/authrix/issues"
   },
   "homepage": "https://github.com/Grenish/authrix#readme",
-  "description": "",
   "dependencies": {
     "@supabase/supabase-js": "^2.50.4",
     "axios": "^1.10.0",
@@ -36,6 +55,7 @@
     "@types/express": "^5.0.3",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.0.12",
+    "rimraf": "^6.0.1",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3"
   }

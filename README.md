@@ -118,5 +118,3 @@ Contributions are welcome! Please open issues or pull requests for bugs, feature
 ---
 
 ## License
-
-MIT © \[Your Name or Company]

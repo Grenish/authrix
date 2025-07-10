@@ -3,7 +3,8 @@ import { hashPassword } from "../utils/hash";
 import { createToken } from "../tokens/createToken";
 import type { Response } from "express";
 
-export async function signup(email: string, password: string, res: Response) {
+// Framework-agnostic signup function
+export async function signupCore(email: string, password: string) {
   const db = authConfig.db;
   if (!db) throw new Error("Database not configured");
 
@@ -19,12 +20,24 @@ export async function signup(email: string, password: string, res: Response) {
 
   const token = createToken({ id: user.id, email });
 
-  res.cookie(authConfig.cookieName, token, {
-    httpOnly: true,
-    secure: true,
-    maxAge: 1000 * 60 * 60 * 24 * 7,
-    sameSite: "lax",
-  });
+  return { 
+    user: { id: user.id, email }, 
+    token,
+    cookieOptions: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 1000 * 60 * 60 * 24 * 7,
+      sameSite: "lax" as const,
+      path: "/",
+    }
+  };
+}
 
-  return { id: user.id, email };
+// Express.js specific signup function for backward compatibility
+export async function signup(email: string, password: string, res: Response) {
+  const result = await signupCore(email, password);
+  
+  res.cookie(authConfig.cookieName, result.token, result.cookieOptions);
+  
+  return result.user;
 }

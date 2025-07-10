@@ -8,20 +8,26 @@ const COLLECTION_NAME = process.env.AUTH_COLLECTION || "users";
 
 let client: MongoClient;
 let users: Collection;
+let isInitialized = false;
 
 async function initMongoConnection() {
-  if (!client) {
+  if (!isInitialized) {
     client = new MongoClient(MONGO_URI);
     await client.connect();
     users = client.db(DB_NAME).collection(COLLECTION_NAME);
+    isInitialized = true;
   }
 }
 
-// Call init immediately
-await initMongoConnection();
+async function ensureConnection() {
+  if (!isInitialized) {
+    await initMongoConnection();
+  }
+}
 
 export const mongoAdapter: AuthDbAdapter = {
   async findUserByEmail(email: string): Promise<AuthUser | null> {
+    await ensureConnection();
     const user = await users.findOne({ email: email.toLowerCase().trim() });
     if (!user) return null;
 
@@ -34,6 +40,7 @@ export const mongoAdapter: AuthDbAdapter = {
   },
 
   async findUserById(id: string): Promise<AuthUser | null> {
+    await ensureConnection();
     if (!ObjectId.isValid(id)) return null;
 
     const user = await users.findOne({ _id: new ObjectId(id) });
@@ -48,6 +55,7 @@ export const mongoAdapter: AuthDbAdapter = {
   },
 
   async createUser({ email, password }) {
+    await ensureConnection();
     const normalizedEmail = email.toLowerCase().trim();
     const now = new Date();
 

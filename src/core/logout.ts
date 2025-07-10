@@ -1,14 +1,31 @@
 import type { Response } from "express";
 import { authConfig } from "../config";
 
-export function logout(res: Response) {
-  const cookieName = authConfig.cookieName;
+// Framework-agnostic logout function
+export function logoutCore() {
+  return {
+    cookieName: authConfig.cookieName,
+    cookieOptions: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax" as const,
+      path: "/",
+      expires: new Date(0), // Expire immediately
+    },
+    message: "Logged out successfully"
+  };
+}
 
-  res.clearCookie(cookieName, {
+// Express.js specific logout function for backward compatibility
+export function logout(res: Response) {
+  const result = logoutCore();
+
+  res.clearCookie(result.cookieName, {
     httpOnly: true,
-    secure: true,
+    secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
+    path: "/",
   });
 
-  return { message: "Logged out successfully" };
+  return { message: result.message };
 }

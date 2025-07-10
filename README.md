@@ -9,8 +9,7 @@ Built for developers who want full control over authentication logic without the
 
 ## ⚠️ Status
 
-This library is **not yet published** on npm and is under active development.
-APIs and features may change before the first stable release.
+This library is available on npm but is still in **early development** and has not been thoroughly tested. It is not recommended for production use at this stage, as it may contain bugs or incomplete features that could lead to unexpected behavior.
 
 ---
 
@@ -59,7 +58,9 @@ import { signupUniversal, validateAuth } from "authrix";
 
 ## Installation
 
-TBA
+```bash
+npm publish --access public
+```
 
 ---
 
@@ -210,3 +211,5 @@ Contributions are welcome! Please open issues or pull requests for bugs, feature
 ---
 
 ## License
+
+MIT License. See [LICENSE](./LICENSE) for details.

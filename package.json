@@ -13,6 +13,21 @@
       "types": "./dist/index.d.ts",
       "require": "./dist/index.cjs",
       "import": "./dist/index.mjs"
+    },
+    "./oauth": {
+      "types": "./dist/oauth.d.ts",
+      "require": "./dist/oauth.cjs",
+      "import": "./dist/oauth.mjs"
+    },
+    "./providers/google": {
+      "types": "./dist/providers/google.d.ts",
+      "require": "./dist/providers/google.cjs",
+      "import": "./dist/providers/google.mjs"
+    },
+    "./providers/github": {
+      "types": "./dist/providers/github.d.ts",
+      "require": "./dist/providers/github.cjs",
+      "import": "./dist/providers/github.mjs"
     }
   },
   "files": [

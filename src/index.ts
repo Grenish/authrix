@@ -18,9 +18,14 @@ export { supabaseAdapter } from "./adapters/supabase";
 export { firebaseAdapter } from "./adapters/firebase";
 // export { prismaAdapter } from "./adapters/prisma"; // Uncomment when prisma adapter is ready
 
-// --- OAuth Providers ---
-export { getGoogleOAuthURL, handleGoogleCallback } from "./providers/google";
-export { getGitHubOAuthURL, handleGitHubCallback } from "./providers/github";
+// --- OAuth Providers (Optional - only load when explicitly imported) ---
+// Note: OAuth providers are exported separately to avoid environment variable errors when OAuth is not used
+// To use OAuth providers, import them from 'authrix/oauth':
+// import { getGoogleOAuthURL, handleGoogleCallback, getGitHubOAuthURL, handleGitHubCallback } from 'authrix/oauth';
+//
+// For backwards compatibility, you can still import them individually:
+// import { getGoogleOAuthURL } from 'authrix/providers/google';
+// import { getGitHubOAuthURL } from 'authrix/providers/github';
 
 // --- Framework-Specific Utilities ---
 // Universal (framework-agnostic)

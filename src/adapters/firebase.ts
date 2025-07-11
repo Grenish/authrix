@@ -12,33 +12,54 @@ import {
   getDocs 
 } from "firebase/firestore";
 
-// Firebase config from environment
-const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.FIREBASE_APP_ID,
-};
+// Firebase config from environment - lazy loaded
+let app: FirebaseApp | null = null;
+let db: Firestore | null = null;
 
-const COLLECTION_NAME = process.env.FIREBASE_AUTH_COLLECTION || "users";
+function getFirebaseApp(): FirebaseApp {
+  if (!app) {
+    const firebaseConfig = {
+      apiKey: process.env.FIREBASE_API_KEY,
+      authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+      messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+      appId: process.env.FIREBASE_APP_ID,
+    };
 
-// Initialize Firebase
-let app: FirebaseApp;
-if (getApps().length === 0) {
-  app = initializeApp(firebaseConfig);
-} else {
-  app = getApps()[0];
+    // Validate required config
+    if (!firebaseConfig.apiKey || !firebaseConfig.authDomain || !firebaseConfig.projectId) {
+      throw new Error("Missing required Firebase environment variables. Please set FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, and FIREBASE_PROJECT_ID.");
+    }
+
+    if (getApps().length === 0) {
+      app = initializeApp(firebaseConfig);
+    } else {
+      app = getApps()[0];
+    }
+  }
+  
+  return app;
 }
 
-const db: Firestore = getFirestore(app);
+function getFirebaseDb(): Firestore {
+  if (!db) {
+    db = getFirestore(getFirebaseApp());
+  }
+  return db;
+}
+
+function getCollectionName(): string {
+  return process.env.FIREBASE_AUTH_COLLECTION || "users";
+}
 
 export const firebaseAdapter: AuthDbAdapter = {
   async findUserByEmail(email: string): Promise<AuthUser | null> {
     try {
+      const db = getFirebaseDb();
+      const collectionName = getCollectionName();
       const normalizedEmail = email.toLowerCase().trim();
-      const usersRef = collection(db, COLLECTION_NAME);
+      const usersRef = collection(db, collectionName);
       const q = query(usersRef, where("email", "==", normalizedEmail));
       const querySnapshot = await getDocs(q);
 
@@ -61,7 +82,10 @@ export const firebaseAdapter: AuthDbAdapter = {
 
   async findUserById(id: string): Promise<AuthUser | null> {
     try {
-      const userRef = doc(db, COLLECTION_NAME, id);
+      const db = getFirebaseDb();
+      const collectionName = getCollectionName();
+      
+      const userRef = doc(db, collectionName, id);
       const userSnap = await getDoc(userRef);
 
       if (!userSnap.exists()) return null;
@@ -82,11 +106,14 @@ export const firebaseAdapter: AuthDbAdapter = {
 
   async createUser({ email, password }): Promise<AuthUser> {
     try {
+      const db = getFirebaseDb();
+      const collectionName = getCollectionName();
+      
       const normalizedEmail = email.toLowerCase().trim();
       const now = new Date();
       
       // Generate a new document reference to get the ID
-      const userRef = doc(collection(db, COLLECTION_NAME));
+      const userRef = doc(collection(db, collectionName));
       
       const userData = {
         email: normalizedEmail,

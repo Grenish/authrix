@@ -1,17 +1,24 @@
 import axios from "axios";
 
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
+// Lazy-load environment variables to avoid errors when OAuth is not used
+function getGoogleOAuthConfig() {
+    const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+    const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+    const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
 
-if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !REDIRECT_URI) {
-    throw new Error("Missing Google OAuth environment variables. Please set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.");
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !REDIRECT_URI) {
+        throw new Error("Missing Google OAuth environment variables. Please set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI in your environment file. These are only required when using Google OAuth functionality.");
+    }
+
+    return { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, REDIRECT_URI };
 }
 
 export function getGoogleOAuthURL(state: string) {
+    const { GOOGLE_CLIENT_ID, REDIRECT_URI } = getGoogleOAuthConfig();
+    
     const params = new URLSearchParams({
-        client_id: GOOGLE_CLIENT_ID!,
-        redirect_uri: REDIRECT_URI!,
+        client_id: GOOGLE_CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
         response_type: "code",
         scope: "openid profile email",
         access_type: "offline",
@@ -23,14 +30,16 @@ export function getGoogleOAuthURL(state: string) {
 }
 
 export async function handleGoogleCallback(code: string) {
+    const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, REDIRECT_URI } = getGoogleOAuthConfig();
+    
     try {
         const tokenRes = await axios.post(
             "https://oauth2.googleapis.com/token",
             new URLSearchParams({
                 code,
-                client_id: GOOGLE_CLIENT_ID!,
-                client_secret: GOOGLE_CLIENT_SECRET!,
-                redirect_uri: REDIRECT_URI!,
+                client_id: GOOGLE_CLIENT_ID,
+                client_secret: GOOGLE_CLIENT_SECRET,
+                redirect_uri: REDIRECT_URI,
                 grant_type: "authorization_code",
             }),
             {

@@ -1,5 +1,3 @@
-import axios from "axios";
-
 // Lazy-load environment variables to avoid errors when OAuth is not used
 function getGitHubOAuthConfig() {
     const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
@@ -30,47 +28,62 @@ export async function handleGitHubCallback(code: string) {
     const { GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, REDIRECT_URI } = getGitHubOAuthConfig();
     
     try {
-        const tokenRes = await axios.post(
-            "https://github.com/login/oauth/access_token",
-            {
+        const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+            method: "POST",
+            headers: {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
                 client_id: GITHUB_CLIENT_ID,
                 client_secret: GITHUB_CLIENT_SECRET,
                 code,
                 redirect_uri: REDIRECT_URI,
-            },
-            {
-                headers: {
-                    Accept: "application/json",
-                },
-            }
-        );
+            }),
+        });
 
-        const accessToken = tokenRes.data.access_token;
+        if (!tokenRes.ok) {
+            throw new Error(`GitHub OAuth token request failed: ${tokenRes.statusText}`);
+        }
+
+        const tokenData = await tokenRes.json();
+        const accessToken = tokenData.access_token;
         if (!accessToken) throw new Error("GitHub OAuth failed: no access token");
 
-        const userRes = await axios.get("https://api.github.com/user", {
+        const userRes = await fetch("https://api.github.com/user", {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
             },
         });
 
-        const emailRes = await axios.get("https://api.github.com/user/emails", {
+        if (!userRes.ok) {
+            throw new Error(`GitHub OAuth user request failed: ${userRes.statusText}`);
+        }
+
+        const emailRes = await fetch("https://api.github.com/user/emails", {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
             },
         });
 
-        const primaryEmail = emailRes.data.find((e: any) => e.primary && e.verified)?.email;
+        if (!emailRes.ok) {
+            throw new Error(`GitHub OAuth email request failed: ${emailRes.statusText}`);
+        }
+
+        const userData = await userRes.json();
+        const emailData = await emailRes.json();
+
+        const primaryEmail = emailData.find((e: any) => e.primary && e.verified)?.email;
 
         if (!primaryEmail) {
             throw new Error("GitHub OAuth failed: no verified primary email found.");
         }
 
         return {
-            id: userRes.data.id.toString(),
+            id: userData.id.toString(),
             email: primaryEmail,
-            name: userRes.data.name,
-            avatar: userRes.data.avatar_url,
+            name: userData.name,
+            avatar: userData.avatar_url,
             provider: "github",
         };
     } catch (error) {

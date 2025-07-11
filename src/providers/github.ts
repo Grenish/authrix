@@ -1,14 +1,21 @@
 import axios from "axios";
 
-const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID!;
-const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET!;
-const REDIRECT_URI = process.env.GITHUB_REDIRECT_URI!;
+// Lazy-load environment variables to avoid errors when OAuth is not used
+function getGitHubOAuthConfig() {
+    const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
+    const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
+    const REDIRECT_URI = process.env.GITHUB_REDIRECT_URI;
 
-if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET || !REDIRECT_URI) {
-    throw new Error("Missing GitHub OAuth environment variables. Please set GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, and GITHUB_REDIRECT_URI.");
+    if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET || !REDIRECT_URI) {
+        throw new Error("Missing GitHub OAuth environment variables. Please set GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, and GITHUB_REDIRECT_URI in your environment file. These are only required when using GitHub OAuth functionality.");
+    }
+
+    return { GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, REDIRECT_URI };
 }
 
 export function getGitHubOAuthURL(state: string) {
+    const { GITHUB_CLIENT_ID, REDIRECT_URI } = getGitHubOAuthConfig();
+    
     const params = new URLSearchParams({
         client_id: GITHUB_CLIENT_ID,
         redirect_uri: REDIRECT_URI,
@@ -20,6 +27,8 @@ export function getGitHubOAuthURL(state: string) {
 }
 
 export async function handleGitHubCallback(code: string) {
+    const { GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, REDIRECT_URI } = getGitHubOAuthConfig();
+    
     try {
         const tokenRes = await axios.post(
             "https://github.com/login/oauth/access_token",

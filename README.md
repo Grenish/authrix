@@ -197,10 +197,25 @@ See [Mongo Adapter](./adapters/mongo.ts) for example.
 
 ---
 
-## OAuth Providers (Planned)
+## OAuth Providers
 
 Authrix provides helper functions to integrate GitHub and Google OAuth login flows.
-Check out the `/providers` directory for usage examples.
+
+**Important:** OAuth providers are now exported separately to avoid environment variable validation errors when OAuth is not used. 
+
+For detailed usage instructions, see [OAuth Usage Guide](./OAUTH_USAGE.md).
+
+### Quick OAuth Import
+```typescript
+// Import all OAuth providers
+import { getGoogleOAuthURL, handleGoogleCallback, getGitHubOAuthURL, handleGitHubCallback } from 'authrix/oauth';
+
+// Or import individual providers
+import { getGoogleOAuthURL, handleGoogleCallback } from 'authrix/providers/google';
+import { getGitHubOAuthURL, handleGitHubCallback } from 'authrix/providers/github';
+```
+
+OAuth environment variables are only validated when OAuth functions are actually called, not during library import.
 
 ---
 

@@ -142,3 +142,9 @@ dist
 .svelte-kit
 
 # End of https://www.toptal.com/developers/gitignore/api/node
+
+
+# Extras
+BUG_FIX_SUMMARY.md
+MCP.md
+OAUTH_USAGE.md

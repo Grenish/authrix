@@ -1,5 +1,7 @@
 # Framework Usage Examples
 
+> **Note:** OAuth providers are now exported separately to prevent environment variable errors. Import them from `authrix/oauth` or individual provider files. See [OAUTH_USAGE.md](./OAUTH_USAGE.md) for details.
+
 ## Express.js (Original - Still Supported)
 
 ```typescript

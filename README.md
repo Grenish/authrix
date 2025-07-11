@@ -29,29 +29,29 @@ This library is available on npm but is still in **early development** and has n
 
 ## 🚀 Framework Support
 
-### Express.js (Original)
+### Express.js (Core)
 ```typescript
 import { initAuth, signin, signup, authMiddleware } from "authrix";
 ```
 
 ### Next.js App Router
 ```typescript
-import { signupNextApp, getCurrentUserNextApp } from "authrix";
+import { signupNextApp, getCurrentUserNextApp } from "authrix/nextjs";
 ```
 
 ### Next.js Pages Router
 ```typescript
-import { signupNextPages, withAuth } from "authrix";
+import { signupNextPages, withAuth } from "authrix/nextjs";
 ```
 
 ### React SPA
 ```typescript
-import { signupReact, getCurrentUserReact, withAuthReact } from "authrix";
+import { signupReact, getCurrentUserReact, withAuthReact } from "authrix/react";
 ```
 
 ### Universal (Any Framework)
 ```typescript
-import { signupUniversal, validateAuth } from "authrix";
+import { signupUniversal, validateAuth } from "authrix/universal";
 ```
 
 ---
@@ -59,8 +59,28 @@ import { signupUniversal, validateAuth } from "authrix";
 ## Installation
 
 ```bash
-npm publish --access public
+npm install authrix
 ```
+
+## ⚡ Bundle Size Optimization
+
+Authrix is now **ultra-lightweight** with modular imports:
+- **Core bundle**: Only 7.8 kB for essential authentication  
+- **Total package**: 110.2 kB (but you only load what you use!)
+- **Previous size**: 285.5 kB → **65% reduction**
+
+Import only what you need:
+```typescript
+// Core authentication only (~7.8 kB)
+import { initAuth, signup, signin } from "authrix";
+
+// Framework-specific helpers (when needed)
+import { signupNextApp } from "authrix/nextjs";     // +9.8 kB
+import { signupReact } from "authrix/react";        // +3.6 kB
+import { getGoogleOAuthURL } from "authrix/oauth";  // +7.8 kB
+```
+
+📖 See [Bundle Optimization Guide](./BUNDLE_OPTIMIZATION.md) for details.
 
 ---
 
@@ -71,7 +91,8 @@ npm publish --access public
 ```typescript
 import express from "express";
 import cookieParser from "cookie-parser";
-import { initAuth, signin, signup, authMiddleware, mongoAdapter } from "authrix";
+import { initAuth, signin, signup, authMiddleware } from "authrix";
+import { mongoAdapter } from "authrix/adapters/mongo";
 
 initAuth({
   jwtSecret: process.env.JWT_SECRET!,
@@ -103,7 +124,8 @@ app.listen(3000);
 
 ```typescript
 // app/auth/signup/route.ts
-import { initAuth, signupNextApp, mongoAdapter } from "authrix";
+import { initAuth, signupNextApp } from "authrix/nextjs";
+import { mongoAdapter } from "authrix/adapters/mongo";
 
 initAuth({
   jwtSecret: process.env.JWT_SECRET!,
@@ -121,7 +143,7 @@ export async function POST(request: Request) {
 }
 
 // app/profile/page.tsx
-import { getCurrentUserNextApp } from "authrix";
+import { getCurrentUserNextApp } from "authrix/nextjs";
 import { redirect } from "next/navigation";
 
 export default async function ProfilePage() {
@@ -137,7 +159,7 @@ export default async function ProfilePage() {
 ```typescript
 // hooks/useAuth.ts
 import { useState, useEffect } from "react";
-import { getCurrentUserReact, signupReact, signinReact, logoutReact } from "authrix";
+import { getCurrentUserReact, signupReact, signinReact, logoutReact } from "authrix/react";
 
 export function useAuth() {
   const [user, setUser] = useState(null);
@@ -181,7 +203,7 @@ Call `initAuth()` once at startup to configure:
 
 ---
 
-## Adapters (Planned)
+## Adapters
 
 You must provide a database adapter implementing:
 
@@ -193,7 +215,15 @@ interface AuthDbAdapter {
 }
 ```
 
-See [Mongo Adapter](./adapters/mongo.ts) for example.
+### Import Adapters
+```typescript
+// Import adapters individually to reduce bundle size
+import { mongoAdapter } from 'authrix/adapters/mongo';
+import { supabaseAdapter } from 'authrix/adapters/supabase';
+import { firebaseAdapter } from 'authrix/adapters/firebase';
+```
+
+See adapter files for configuration examples.
 
 ---
 

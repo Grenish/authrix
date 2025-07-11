@@ -1,23 +1,36 @@
 import type { AuthDbAdapter, AuthUser } from "../types/db";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-// Read from environment
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-const TABLE_NAME = process.env.SUPABASE_AUTH_TABLE || "users";
+// Lazy-load environment variables and client to avoid errors when adapter is not used
+let supabaseClient: SupabaseClient | null = null;
 
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY environment variables are required");
+function getSupabaseClient(): SupabaseClient {
+  if (!supabaseClient) {
+    const SUPABASE_URL = process.env.SUPABASE_URL;
+    const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY environment variables are required");
+    }
+
+    supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  }
+  
+  return supabaseClient;
 }
 
-const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+function getTableName(): string {
+  return process.env.SUPABASE_AUTH_TABLE || "users";
+}
 
 export const supabaseAdapter: AuthDbAdapter = {
   async findUserByEmail(email: string): Promise<AuthUser | null> {
+    const supabase = getSupabaseClient();
+    const tableName = getTableName();
     const normalizedEmail = email.toLowerCase().trim();
     
     const { data, error } = await supabase
-      .from(TABLE_NAME)
+      .from(tableName)
       .select("*")
       .eq("email", normalizedEmail)
       .single();
@@ -33,8 +46,11 @@ export const supabaseAdapter: AuthDbAdapter = {
   },
 
   async findUserById(id: string): Promise<AuthUser | null> {
+    const supabase = getSupabaseClient();
+    const tableName = getTableName();
+    
     const { data, error } = await supabase
-      .from(TABLE_NAME)
+      .from(tableName)
       .select("*")
       .eq("id", id)
       .single();
@@ -50,11 +66,13 @@ export const supabaseAdapter: AuthDbAdapter = {
   },
 
   async createUser({ email, password }): Promise<AuthUser> {
+    const supabase = getSupabaseClient();
+    const tableName = getTableName();
     const normalizedEmail = email.toLowerCase().trim();
     const now = new Date();
 
     const { data, error } = await supabase
-      .from(TABLE_NAME)
+      .from(tableName)
       .insert({
         email: normalizedEmail,
         password,

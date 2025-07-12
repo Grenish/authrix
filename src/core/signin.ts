@@ -6,7 +6,10 @@ import type { Response } from "express";
 // Framework-agnostic signin function
 export async function signinCore(email: string, password: string) {
   const db = authConfig.db;
-  if (!db) throw new Error("Database not configured");
+  
+  if (!db) {
+    throw new Error("Database not configured. Make sure initAuth() is called before using authentication functions.");
+  }
 
   const user = await db.findUserByEmail(email);
   if (!user) throw new Error("Invalid email or password");

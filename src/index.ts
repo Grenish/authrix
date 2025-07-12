@@ -15,7 +15,7 @@ export { logout, logoutCore } from "./core/logout";
 export { getCurrentUser, getCurrentUserFromToken, isAuthenticated, isTokenValid } from "./core/session";
 
 // --- Configuration ---
-export { initAuth, authConfig } from "./config/index";
+export { initAuth, authConfig, isAuthrixInitialized, getAuthrixStatus } from "./config/index";
 
 // --- Essential Middleware ---
 export { requireAuth } from "./core/requireAuth";

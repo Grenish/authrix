@@ -34,6 +34,12 @@ This library is available on npm but is still in **early development** and has n
 import { initAuth, signin, signup, authMiddleware } from "authrix";
 ```
 
+### Next.js (Flexible - Recommended)
+```typescript
+import { signupNextFlexible, getCurrentUserNextFlexible } from "authrix/nextjs";
+// Works in both App Router and Pages Router contexts automatically
+```
+
 ### Next.js App Router
 ```typescript
 import { signupNextApp, getCurrentUserNextApp } from "authrix/nextjs";
@@ -181,6 +187,33 @@ export function useAuth() {
   return { user, loading, signup, signin, logout };
 }
 ```
+
+---
+
+## 🌐 Next.js Edge Runtime Support
+
+Authrix v1.0.1+ includes **Edge Runtime compatible** middleware for Next.js:
+
+```typescript
+// middleware.ts (Edge Runtime Compatible!)
+import { checkAuthMiddleware } from 'authrix/nextjs';
+
+export async function middleware(request: NextRequest) {
+  const auth = await checkAuthMiddleware(request);
+  
+  if (!auth.isAuthenticated && request.nextUrl.pathname.startsWith('/dashboard')) {
+    return NextResponse.redirect(new URL('/signin', request.url));
+  }
+}
+```
+
+**Features:**
+- ✅ **Edge Runtime Compatible** - No Node.js dependencies
+- ✅ **Basic validation** - Structure and expiration checking
+- ✅ **Secure validation** - Full JWT verification via API
+- ✅ **Zero config** - Works out of the box
+
+📖 See [Edge Runtime Guide](./EDGE_RUNTIME_GUIDE.md) for full documentation.
 
 ---
 

@@ -6,7 +6,10 @@ import type { Response } from "express";
 // Framework-agnostic signup function
 export async function signupCore(email: string, password: string) {
   const db = authConfig.db;
-  if (!db) throw new Error("Database not configured");
+  
+  if (!db) {
+    throw new Error("Database not configured. Make sure initAuth() is called before using authentication functions.");
+  }
 
   const existing = await db.findUserByEmail(email);
   if (existing) throw new Error("Email already registered");

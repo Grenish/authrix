@@ -4,6 +4,11 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 // Lazy-load environment variables and client to avoid errors when adapter is not used
 let supabaseClient: SupabaseClient | null = null;
 
+// Reset function for testing
+export function resetSupabaseConnection() {
+  supabaseClient = null;
+}
+
 function getSupabaseClient(): SupabaseClient {
   if (!supabaseClient) {
     const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -25,24 +30,32 @@ function getTableName(): string {
 
 export const supabaseAdapter: AuthDbAdapter = {
   async findUserByEmail(email: string): Promise<AuthUser | null> {
-    const supabase = getSupabaseClient();
-    const tableName = getTableName();
-    const normalizedEmail = email.toLowerCase().trim();
-    
-    const { data, error } = await supabase
-      .from(tableName)
-      .select("*")
-      .eq("email", normalizedEmail)
-      .single();
+    try {
+      const supabase = getSupabaseClient();
+      const tableName = getTableName();
+      const normalizedEmail = email.toLowerCase().trim();
+      
+      const { data, error } = await supabase
+        .from(tableName)
+        .select("*")
+        .eq("email", normalizedEmail)
+        .single();
 
-    if (error || !data) return null;
+      if (error || !data) return null;
 
-    return {
-      id: data.id.toString(),
-      email: data.email,
-      password: data.password,
-      createdAt: data.created_at ? new Date(data.created_at) : undefined,
-    };
+      return {
+        id: data.id.toString(),
+        email: data.email,
+        password: data.password,
+        createdAt: data.created_at ? new Date(data.created_at) : undefined,
+      };
+    } catch (error) {
+      // Let environment variable errors bubble up
+      if (error instanceof Error && error.message.includes('environment variables are required')) {
+        throw error;
+      }
+      return null;
+    }
   },
 
   async findUserById(id: string): Promise<AuthUser | null> {

@@ -1,9 +1,16 @@
 // Next.js utilities for Authrix
 // These imports are optional and will only work when Next.js is available
 
+import { signupCore } from "../core/signup";
+import { signinCore } from "../core/signin";
+import { logoutCore } from "../core/logout";
+import { getCurrentUserFromToken, isTokenValid } from "../core/session";
+import { authConfig } from "../config";
+
 let NextRequest: any, NextResponse: any, NextApiRequest: any, NextApiResponse: any, cookies: any;
 let isNextJsAvailable = false;
 let nextJsContext: 'app-router' | 'pages-router' | 'middleware' | 'unknown' = 'unknown';
+let detectionComplete = false;
 
 // Helper function to safely get cookie name with fallback
 function getSafeCookieName(): string {
@@ -16,79 +23,155 @@ function getSafeCookieName(): string {
   }
 }
 
-// Detect Next.js availability and context
+// Improved Next.js detection that works in various environments
 function detectNextJsEnvironment() {
-  try {
-    // Check for Next.js core
-    require.resolve('next');
-    isNextJsAvailable = true;
-  } catch (error) {
-    isNextJsAvailable = false;
+  if (detectionComplete) {
     return;
   }
 
   try {
-    // Try to import Next.js server components
-    const nextServer = require("next/server");
-    NextRequest = nextServer.NextRequest;
-    NextResponse = nextServer.NextResponse;
-  } catch (error) {
-    // Next.js server components not available
-  }
+    // Method 1: Try dynamic import approach (works better in bundled environments)
+    let nextServerModule: any;
+    let nextModule: any;
+    let nextHeadersModule: any;
 
-  try {
-    // Try to import Next.js pages router types
-    const next = require("next");
-    NextApiRequest = next.NextApiRequest;
-    NextApiResponse = next.NextApiResponse;
-  } catch (error) {
-    // Next.js pages router not available
-  }
+    // Check if we're in a Node.js environment with require
+    if (typeof require !== 'undefined') {
+      try {
+        // Check for Next.js core availability
+        require.resolve('next');
+        isNextJsAvailable = true;
+      } catch (error) {
+        // Try alternative detection methods
+      }
 
-  try {
-    // Try to import Next.js headers for App Router
-    const nextHeaders = require("next/headers");
-    cookies = nextHeaders.cookies;
-    
-    // If we can access cookies, we're likely in App Router context
-    if (typeof cookies === 'function') {
-      nextJsContext = 'app-router';
+      if (isNextJsAvailable) {
+        try {
+          nextServerModule = require("next/server");
+          NextRequest = nextServerModule.NextRequest;
+          NextResponse = nextServerModule.NextResponse;
+        } catch (error) {
+          // Next.js server components not available
+        }
+
+        try {
+          nextModule = require("next");
+          NextApiRequest = nextModule.NextApiRequest;
+          NextApiResponse = nextModule.NextApiResponse;
+        } catch (error) {
+          // Next.js pages router not available
+        }
+
+        try {
+          nextHeadersModule = require("next/headers");
+          cookies = nextHeadersModule.cookies;
+        } catch (error) {
+          // Next.js headers not available
+          cookies = null;
+        }
+      }
     }
-  } catch (error) {
-    // Next.js headers not available
-    cookies = null;
-    
-    // If we have NextApiRequest/NextApiResponse, we're in Pages Router context
-    if (NextApiRequest && NextApiResponse) {
-      nextJsContext = 'pages-router';
-    }
-  }
 
-  // Check if we're in middleware context
-  if (NextRequest && NextResponse && !cookies) {
-    nextJsContext = 'middleware';
+    // Method 2: Check for global Next.js objects (in browser/Edge Runtime)
+    if (!isNextJsAvailable) {
+      // Check if we're in a Next.js environment by looking for globals
+      if (typeof globalThis !== 'undefined') {
+        // Look for Next.js specific globals
+        const hasNextGlobals = 
+          (globalThis as any).__NEXT_DATA__ ||
+          (globalThis as any).__next ||
+          (globalThis as any).next;
+        
+        if (hasNextGlobals) {
+          isNextJsAvailable = true;
+        }
+      }
+
+      // Check for process.env.NEXT_RUNTIME (available in Next.js environments)
+      if (typeof process !== 'undefined' && process.env?.NEXT_RUNTIME) {
+        isNextJsAvailable = true;
+      }
+
+      // Check for Next.js specific environment variables
+      if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_VERCEL_URL) {
+        isNextJsAvailable = true;
+      }
+    }
+
+    // Method 3: Try to detect based on available APIs
+    if (!isNextJsAvailable) {
+      try {
+        // If we can create these constructors, we might be in Next.js
+        if (typeof Request !== 'undefined' && typeof Response !== 'undefined') {
+          // This is a weaker signal but might indicate a Next.js environment
+          // We'll mark as potentially available but won't set the flag definitively
+        }
+      } catch (error) {
+        // Not in a Web API environment
+      }
+    }
+
+    // Determine context based on available APIs
+    if (isNextJsAvailable) {
+      // Determine the context
+      if (cookies && typeof cookies === 'function') {
+        nextJsContext = 'app-router';
+      } else if (NextApiRequest && NextApiResponse) {
+        nextJsContext = 'pages-router';
+      } else if (NextRequest && NextResponse) {
+        nextJsContext = 'middleware';
+      } else {
+        // Try to detect context by environment
+        if (typeof process !== 'undefined') {
+          if (process.env.NEXT_RUNTIME === 'edge') {
+            nextJsContext = 'middleware';
+          } else if (process.env.NEXT_RUNTIME === 'nodejs') {
+            nextJsContext = 'app-router'; // Likely App Router
+          }
+        }
+      }
+    }
+
+    detectionComplete = true;
+  } catch (error) {
+    // Fallback: assume not available
+    isNextJsAvailable = false;
+    nextJsContext = 'unknown';
+    detectionComplete = true;
   }
 }
 
-// Run detection
-detectNextJsEnvironment();
+// Lazy detection function that runs when actually needed
+function ensureDetection() {
+  if (!detectionComplete) {
+    detectNextJsEnvironment();
+  }
+}
 
-import { signupCore } from "../core/signup";
-import { signinCore } from "../core/signin";
-import { logoutCore } from "../core/logout";
-import { getCurrentUserFromToken, isTokenValid } from "../core/session";
-import { authConfig } from "../config";
+// Run initial detection
+detectNextJsEnvironment();
 
 // Helper function to check if Next.js is available and provide better error messages
 function ensureNextJs(feature: string) {
+  // Ensure detection has run
+  ensureDetection();
+  
   if (!isNextJsAvailable) {
-    throw new Error(`${feature} requires Next.js to be installed. Please install Next.js: npm install next`);
+    throw new Error(
+      `${feature} requires Next.js to be installed and properly configured.\n` +
+      `Please check:\n` +
+      `1. Next.js is installed: npm install next\n` +
+      `2. You're running this code in a Next.js environment\n` +
+      `3. Your bundler is configured to handle Next.js modules\n` +
+      `\nIf you're using Authrix outside of Next.js, consider using the universal functions from 'authrix/universal'.`
+    );
   }
   
   // Provide context-specific guidance
   if (feature.includes('NextApp') && nextJsContext !== 'app-router' && !cookies) {
     throw new Error(
       `${feature} requires Next.js App Router with 'next/headers' support. ` +
+      `Current context: ${nextJsContext}. ` +
       `This function should be called from a Server Component, Server Action, or Route Handler in the App Router. ` +
       `If you're using Pages Router, use the 'NextPages' equivalent function instead. ` +
       `If you're not in a Next.js context, use the universal functions from 'authrix/universal'.`
@@ -101,12 +184,23 @@ function ensureNextJs(feature: string) {
  * Useful for debugging Next.js detection issues
  */
 export function getNextJsEnvironmentInfo() {
+  // Ensure detection has run
+  ensureDetection();
+  
   return {
     isNextJsAvailable,
     context: nextJsContext,
     hasAppRouterSupport: !!cookies,
     hasPagesRouterSupport: !!(NextApiRequest && NextApiResponse),
-    hasMiddlewareSupport: !!(NextRequest && NextResponse)
+    hasMiddlewareSupport: !!(NextRequest && NextResponse),
+    detectionComplete,
+    runtimeInfo: {
+      hasRequire: typeof require !== 'undefined',
+      hasGlobalThis: typeof globalThis !== 'undefined',
+      hasProcess: typeof process !== 'undefined',
+      nextRuntime: typeof process !== 'undefined' ? process.env?.NEXT_RUNTIME : undefined,
+      hasNextData: typeof globalThis !== 'undefined' ? !!(globalThis as any).__NEXT_DATA__ : false
+    }
   };
 }
 
@@ -513,8 +607,13 @@ export function withAuth<T extends Record<string, any>, U extends Record<string,
  * Automatically detects the context and uses the appropriate method
  */
 export async function signupNextFlexible(email: string, password: string, res?: any) {
+  ensureDetection();
+  
   if (!isNextJsAvailable) {
-    throw new Error("Next.js is not available. Please install Next.js: npm install next");
+    throw new Error(
+      "Next.js is not available. Please install Next.js: npm install next\n" +
+      "If you're not using Next.js, consider using 'signupUniversal' from 'authrix/universal'."
+    );
   }
 
   const result = await signupCore(email, password);
@@ -527,6 +626,7 @@ export async function signupNextFlexible(email: string, password: string, res?: 
       return result.user;
     } catch (error) {
       // If App Router fails, continue to Pages Router method
+      console.warn("App Router cookie setting failed, falling back to Pages Router method");
     }
   }
   
@@ -545,7 +645,9 @@ export async function signupNextFlexible(email: string, password: string, res?: 
   throw new Error(
     "Unable to set authentication cookie. This function requires either Next.js App Router context " +
     "or a response object for Pages Router. Consider using 'signupUniversal' from 'authrix/universal' " +
-    "for manual cookie handling."
+    "for manual cookie handling.\n\n" +
+    `Current Next.js context: ${nextJsContext}\n` +
+    `Environment info: ${JSON.stringify(getNextJsEnvironmentInfo(), null, 2)}`
   );
 }
 
@@ -553,8 +655,13 @@ export async function signupNextFlexible(email: string, password: string, res?: 
  * Flexible Next.js signin that works in both App Router and Pages Router
  */
 export async function signinNextFlexible(email: string, password: string, res?: any) {
+  ensureDetection();
+  
   if (!isNextJsAvailable) {
-    throw new Error("Next.js is not available. Please install Next.js: npm install next");
+    throw new Error(
+      "Next.js is not available. Please install Next.js: npm install next\n" +
+      "If you're not using Next.js, consider using 'signinUniversal' from 'authrix/universal'."
+    );
   }
 
   const result = await signinCore(email, password);
@@ -567,6 +674,7 @@ export async function signinNextFlexible(email: string, password: string, res?: 
       return result.user;
     } catch (error) {
       // If App Router fails, continue to Pages Router method
+      console.warn("App Router cookie setting failed, falling back to Pages Router method");
     }
   }
   
@@ -584,7 +692,9 @@ export async function signinNextFlexible(email: string, password: string, res?: 
   throw new Error(
     "Unable to set authentication cookie. This function requires either Next.js App Router context " +
     "or a response object for Pages Router. Consider using 'signinUniversal' from 'authrix/universal' " +
-    "for manual cookie handling."
+    "for manual cookie handling.\n\n" +
+    `Current Next.js context: ${nextJsContext}\n` +
+    `Environment info: ${JSON.stringify(getNextJsEnvironmentInfo(), null, 2)}`
   );
 }
 
@@ -592,8 +702,13 @@ export async function signinNextFlexible(email: string, password: string, res?: 
  * Flexible Next.js get current user that works in both App Router and Pages Router
  */
 export async function getCurrentUserNextFlexible(req?: any) {
+  ensureDetection();
+  
   if (!isNextJsAvailable) {
-    throw new Error("Next.js is not available. Please install Next.js: npm install next");
+    throw new Error(
+      "Next.js is not available. Please install Next.js: npm install next\n" +
+      "If you're not using Next.js, consider using 'validateAuth' from 'authrix/universal'."
+    );
   }
 
   // Try App Router first (if cookies is available)
@@ -604,6 +719,7 @@ export async function getCurrentUserNextFlexible(req?: any) {
       return getCurrentUserFromToken(token);
     } catch (error) {
       // If App Router fails, continue to manual method
+      console.warn("App Router cookie reading failed, falling back to Pages Router method");
     }
   }
   
@@ -616,7 +732,9 @@ export async function getCurrentUserNextFlexible(req?: any) {
   throw new Error(
     "Unable to read authentication cookie. This function requires either Next.js App Router context " +
     "or a request object for Pages Router. Consider using 'validateAuth' from 'authrix/universal' " +
-    "with manual token extraction."
+    "with manual token extraction.\n\n" +
+    `Current Next.js context: ${nextJsContext}\n` +
+    `Environment info: ${JSON.stringify(getNextJsEnvironmentInfo(), null, 2)}`
   );
 }
 
@@ -734,4 +852,39 @@ export function createTokenValidationHandlerPages() {
       });
     }
   };
+}
+
+/**
+ * Manually re-run Next.js environment detection
+ * Useful when the environment might have changed or for debugging detection issues
+ */
+export function redetectNextJsEnvironment() {
+  detectionComplete = false;
+  isNextJsAvailable = false;
+  nextJsContext = 'unknown';
+  NextRequest = NextResponse = NextApiRequest = NextApiResponse = cookies = undefined;
+  
+  detectNextJsEnvironment();
+  
+  return getNextJsEnvironmentInfo();
+}
+
+/**
+ * Force Next.js availability (use with caution)
+ * This can be used to override detection in environments where automatic detection fails
+ */
+export function forceNextJsAvailability(
+  available: boolean, 
+  context?: 'app-router' | 'pages-router' | 'middleware' | 'unknown'
+) {
+  isNextJsAvailable = available;
+  if (context) {
+    nextJsContext = context;
+  }
+  detectionComplete = true;
+  
+  console.warn(
+    `Next.js availability manually set to: ${available}${context ? `, context: ${context}` : ''}\n` +
+    'This should only be used for debugging or in environments where automatic detection fails.'
+  );
 }

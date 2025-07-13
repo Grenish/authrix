@@ -1,7 +1,6 @@
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 
-// Production-grade configuration
 const BCRYPT_ROUNDS = 14; // Increased from 12 for better security
 const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 128; // Prevent DoS attacks

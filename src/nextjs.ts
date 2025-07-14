@@ -16,6 +16,15 @@ export {
   signupNextFlexible,
   signinNextFlexible,
   getCurrentUserNextFlexible,
+  // Simplified production-ready functions (RECOMMENDED)
+  signupNext,
+  signinNext,
+  logoutNext,
+  getCurrentUserNext,
+  isAuthenticatedNext,
+  // Manual cookie helpers
+  createAuthCookieString,
+  createLogoutCookieString,
   // Middleware
   checkAuthMiddleware,
   checkAuthMiddlewareSecure,

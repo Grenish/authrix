@@ -16,6 +16,12 @@ import {
 let app: FirebaseApp | null = null;
 let db: Firestore | null = null;
 
+// Reset function for testing
+export function resetFirebaseConnection() {
+  app = null;
+  db = null;
+}
+
 function getFirebaseApp(): FirebaseApp {
   if (!app) {
     const firebaseConfig = {
@@ -75,6 +81,10 @@ export const firebaseAdapter: AuthDbAdapter = {
         createdAt: userData.createdAt?.toDate(),
       };
     } catch (error) {
+      // Let environment variable errors bubble up
+      if (error instanceof Error && error.message.includes('Missing required Firebase environment variables')) {
+        throw error;
+      }
       console.error("Error finding user by email:", error);
       return null;
     }

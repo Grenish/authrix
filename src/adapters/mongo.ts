@@ -1,17 +1,24 @@
 import type { AuthDbAdapter, AuthUser } from "../types/db";
 import { MongoClient, ObjectId, Collection } from "mongodb";
 
-// Read from environment
-const MONGO_URI = process.env.MONGO_URI;
-const DB_NAME = process.env.DB_NAME;
-const COLLECTION_NAME = process.env.AUTH_COLLECTION;
-
 let client: MongoClient;
 let users: Collection;
 let isInitialized = false;
 
+// Reset function for testing
+export function resetMongoConnection() {
+  isInitialized = false;
+  client = null as any;
+  users = null as any;
+}
+
 async function initMongoConnection() {
   if (!isInitialized) {
+    // Read environment variables dynamically
+    const MONGO_URI = process.env.MONGO_URI;
+    const DB_NAME = process.env.DB_NAME;
+    const COLLECTION_NAME = process.env.AUTH_COLLECTION;
+    
     if (!MONGO_URI || !DB_NAME || !COLLECTION_NAME) {
       throw new Error('Missing required environment variables: MONGO_URI, DB_NAME, AUTH_COLLECTION');
     }

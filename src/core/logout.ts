@@ -1,4 +1,3 @@
-import type { Response } from "express";
 import { authConfig } from "../config";
 
 // Framework-agnostic logout function
@@ -17,15 +16,17 @@ export function logoutCore() {
 }
 
 // Express.js specific logout function for backward compatibility
-export function logout(res: Response) {
+export function logout(res: any) {
   const result = logoutCore();
 
-  res.clearCookie(result.cookieName, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-  });
+  if (res.clearCookie) {
+    res.clearCookie(result.cookieName, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+    });
+  }
 
   return { message: result.message };
 }

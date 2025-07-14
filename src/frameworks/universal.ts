@@ -21,6 +21,13 @@ export interface AuthResult {
   cookieOptions: CookieOptions;
 }
 
+export interface AuthErrorResult {
+  success: false;
+  error: { message: string };
+}
+
+export type AuthResponse = AuthResult | AuthErrorResult;
+
 export interface LogoutResult {
   cookieName: string;
   cookieOptions: CookieOptions;
@@ -31,16 +38,30 @@ export interface LogoutResult {
  * Framework-agnostic signup function
  * Returns user data, token, and cookie options for manual handling
  */
-export async function signupUniversal(email: string, password: string): Promise<AuthResult> {
-  return signupCore(email, password);
+export async function signupUniversal(email: string, password: string): Promise<AuthResponse> {
+  try {
+    return await signupCore(email, password);
+  } catch (error) {
+    return {
+      success: false,
+      error: { message: error instanceof Error ? error.message : 'Unknown error' }
+    };
+  }
 }
 
 /**
  * Framework-agnostic signin function
  * Returns user data, token, and cookie options for manual handling
  */
-export async function signinUniversal(email: string, password: string): Promise<AuthResult> {
-  return signinCore(email, password);
+export async function signinUniversal(email: string, password: string): Promise<AuthResponse> {
+  try {
+    return await signinCore(email, password);
+  } catch (error) {
+    return {
+      success: false,
+      error: { message: error instanceof Error ? error.message : 'Unknown error' }
+    };
+  }
 }
 
 /**

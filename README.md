@@ -1,5 +1,9 @@
 # Authrix
 
+<div align="center">
+  <img src="./logo/logo.png" alt="Authrix Logo" width="250" height="200">
+</div>
+
 > A lightweight, framework-agnostic authentication library for Node.js and TypeScript
 
 [![npm version](https://img.shields.io/npm/v/authrix.svg)](https://www.npmjs.com/package/authrix)

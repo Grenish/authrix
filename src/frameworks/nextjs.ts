@@ -8,6 +8,27 @@ import { getCurrentUserFromToken, isTokenValid } from "../core/session";
 import { authConfig } from "../config";
 
 let NextRequest: any, NextResponse: any, NextApiRequest: any, NextApiResponse: any, cookies: any;
+
+/**
+ * Safely import Next.js headers module
+ * This avoids eval() while still providing dynamic imports
+ */
+function getNextHeaders(): any {
+  try {
+    // Use dynamic require to avoid bundler warnings
+    const requireFunc = typeof require !== 'undefined' ? require : null;
+    if (!requireFunc) {
+      throw new Error('require is not available');
+    }
+    return requireFunc('next/headers');
+  } catch (error) {
+    throw new Error(
+      `Next.js App Router functions require 'next/headers' to be available. ` +
+      `Make sure you're using Next.js 13+ with App Router and this function is called within a Server Component or API Route. ` +
+      `Original error: ${error instanceof Error ? error.message : 'Unknown error'}`
+    );
+  }
+}
 let isNextJsAvailable = false;
 let nextJsContext: 'app-router' | 'pages-router' | 'middleware' | 'unknown' = 'unknown';
 let detectionComplete = false;
@@ -279,8 +300,8 @@ export function logoutNextApp() {
     
     // Try to import and use cookies() dynamically
     try {
-      // Use eval to avoid TypeScript compilation errors
-      const nextHeaders = eval('require("next/headers")');
+      // Use safe dynamic import instead of eval
+      const nextHeaders = getNextHeaders();
       const cookieStore = nextHeaders.cookies();
       cookieStore.set(authConfig.cookieName, "", result.cookieOptions);
       return { message: result.message };
@@ -309,8 +330,8 @@ export async function getCurrentUserNextApp() {
   try {
     // Try to import and use cookies() dynamically
     try {
-      // Use eval to avoid TypeScript compilation errors
-      const nextHeaders = eval('require("next/headers")');
+      // Use safe dynamic import instead of eval
+      const nextHeaders = getNextHeaders();
       const cookieStore = nextHeaders.cookies();
       const token = cookieStore.get(authConfig.cookieName)?.value || null;
       return getCurrentUserFromToken(token);
@@ -339,8 +360,8 @@ export async function isAuthenticatedNextApp(): Promise<boolean> {
   try {
     // Try to import and use cookies() dynamically
     try {
-      // Use eval to avoid TypeScript compilation errors
-      const nextHeaders = eval('require("next/headers")');
+      // Use safe dynamic import instead of eval
+      const nextHeaders = getNextHeaders();
       const cookieStore = nextHeaders.cookies();
       const token = cookieStore.get(authConfig.cookieName)?.value || null;
       return isTokenValid(token);
@@ -726,8 +747,8 @@ export async function signupNextFlexible(email: string, password: string, res?: 
     
     // Try App Router method (next/headers)
     try {
-      // Use eval to avoid TypeScript compilation errors
-      const nextHeaders = eval('require("next/headers")');
+      // Use safe dynamic import instead of eval
+      const nextHeaders = getNextHeaders();
       const cookieStore = nextHeaders.cookies();
       cookieStore.set(authConfig.cookieName, result.token, result.cookieOptions);
       return result.user;
@@ -767,8 +788,8 @@ export async function signinNextFlexible(email: string, password: string, res?: 
     
     // Try App Router method (next/headers)
     try {
-      // Use eval to avoid TypeScript compilation errors
-      const nextHeaders = eval('require("next/headers")');
+      // Use safe dynamic import instead of eval
+      const nextHeaders = getNextHeaders();
       const cookieStore = nextHeaders.cookies();
       cookieStore.set(authConfig.cookieName, result.token, result.cookieOptions);
       return result.user;
@@ -801,8 +822,8 @@ export async function getCurrentUserNextFlexible(req?: any) {
     
     // Try App Router method (next/headers)
     try {
-      // Use eval to avoid TypeScript compilation errors
-      const nextHeaders = eval('require("next/headers")');
+      // Use safe dynamic import instead of eval
+      const nextHeaders = getNextHeaders();
       const cookieStore = nextHeaders.cookies();
       const token = cookieStore.get(authConfig.cookieName)?.value || null;
       return getCurrentUserFromToken(token);

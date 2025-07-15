@@ -14,6 +14,34 @@ export { signin, signinCore } from "./core/signin";
 export { logout, logoutCore } from "./core/logout";
 export { getCurrentUser, getCurrentUserFromToken, isAuthenticated, isTokenValid } from "./core/session";
 
+// --- SSO & OAuth Functions ---
+export { 
+  handleGoogleSSO, 
+  handleGitHubSSO, 
+  handleCustomSSO,
+  processSSOAuthentication,
+  generateSSOState,
+  verifySSOState
+} from "./core/sso";
+export type { SSOUser, SSOOptions, SSOResult } from "./core/sso";
+
+// --- Forgot Password Functions ---
+export { 
+  initiateForgotPassword, 
+  resetPasswordWithCode,
+  generateTemporaryPassword,
+  sendTemporaryPassword
+} from "./core/forgotPassword";
+export type { 
+  ForgotPasswordOptions, 
+  ResetPasswordOptions, 
+  ForgotPasswordResult, 
+  ResetPasswordResult 
+} from "./core/forgotPassword";
+
+// --- Framework Integration Helpers ---
+export { ssoHelpers, forgotPasswordHelpers } from "./frameworks/helpers";
+
 // --- Configuration ---
 export { initAuth, authConfig, isAuthrixInitialized, getAuthrixStatus } from "./config/index";
 

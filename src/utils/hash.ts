@@ -1,5 +1,5 @@
-import bcrypt from "bcryptjs";
-import crypto from "crypto";
+import * as bcrypt from "bcryptjs";
+import { createHash, randomBytes } from "crypto";
 
 const BCRYPT_ROUNDS = 14; // Increased from 12 for better security
 const MIN_PASSWORD_LENGTH = 8;
@@ -78,7 +78,7 @@ function checkRateLimit(identifier: string): boolean {
     
     // Cleanup old entries periodically
     if (passwordOperationTimes.size > 1000) {
-        for (const [key, times] of passwordOperationTimes.entries()) {
+        for (const [key, times] of Array.from(passwordOperationTimes.entries())) {
             const validTimes = times.filter(time => now - time < RATE_LIMIT_WINDOW);
             if (validTimes.length === 0) {
                 passwordOperationTimes.delete(key);
@@ -254,7 +254,7 @@ export function generateSecurePassword(
 
     // Start with required characters to ensure all types are included
     let password = '';
-    const randomBytes = crypto.randomBytes(length * 2);
+    const randomBytesBuffer = randomBytes(length * 2);
     let byteIndex = 0;
     
     // Add required characters first
@@ -264,7 +264,7 @@ export function generateSecurePassword(
     
     // Fill the rest with random characters from the full charset
     for (let i = requiredChars.length; i < length; i++) {
-        const randomIndex = randomBytes[byteIndex] % charset.length;
+        const randomIndex = randomBytesBuffer[byteIndex] % charset.length;
         password += charset[randomIndex];
         byteIndex++;
     }
@@ -272,7 +272,7 @@ export function generateSecurePassword(
     // Shuffle the password to randomize character positions
     const passwordArray = password.split('');
     for (let i = passwordArray.length - 1; i > 0; i--) {
-        const j = randomBytes[byteIndex] % (i + 1);
+        const j = randomBytesBuffer[byteIndex] % (i + 1);
         [passwordArray[i], passwordArray[j]] = [passwordArray[j], passwordArray[i]];
         byteIndex++;
     }

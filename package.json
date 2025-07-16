@@ -2,6 +2,7 @@
   "name": "authrix",
   "version": "1.0.4",
   "description": "Lightweight, flexible authentication library for Node.js and TypeScript.",
+  "sideEffects": false,
   "keywords": [
     "authentication",
     "auth",
@@ -74,6 +75,16 @@
       "require": "./dist/oauth.cjs",
       "import": "./dist/oauth.mjs"
     },
+    "./sso": {
+      "types": "./dist/sso.d.ts",
+      "require": "./dist/sso.cjs",
+      "import": "./dist/sso.mjs"
+    },
+    "./forgotPassword": {
+      "types": "./dist/forgotPassword.d.ts",
+      "require": "./dist/forgotPassword.cjs",
+      "import": "./dist/forgotPassword.mjs"
+    },
     "./adapters": {
       "types": "./dist/adapters/index.d.ts",
       "require": "./dist/adapters/index.cjs",
@@ -84,15 +95,10 @@
       "require": "./dist/adapters/mongo.cjs",
       "import": "./dist/adapters/mongo.mjs"
     },
-    "./adapters/supabase": {
-      "types": "./dist/adapters/supabase.d.ts",
-      "require": "./dist/adapters/supabase.cjs",
-      "import": "./dist/adapters/supabase.mjs"
-    },
-    "./adapters/firebase": {
-      "types": "./dist/adapters/firebase.d.ts",
-      "require": "./dist/adapters/firebase.cjs",
-      "import": "./dist/adapters/firebase.mjs"
+    "./adapters/postgresql": {
+      "types": "./dist/adapters/postgresql.d.ts",
+      "require": "./dist/adapters/postgresql.cjs",
+      "import": "./dist/adapters/postgresql.mjs"
     },
     "./providers/google": {
       "types": "./dist/providers/google.d.ts",

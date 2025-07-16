@@ -4,15 +4,16 @@ export default defineConfig({
     entry: [
         "src/index.ts",
         "src/universal.ts",
-        "src/nextjs.ts", 
+        "src/nextjs.ts",
         "src/react.ts",
         "src/utils.ts",
         "src/middleware.ts",
         "src/oauth.ts",
+        "src/sso.ts",
+        "src/forgotPassword.ts",
         "src/adapters/index.ts",
         "src/adapters/mongo.ts",
-        "src/adapters/supabase.ts",
-        "src/adapters/firebase.ts",
+        "src/adapters/postgresql.ts",
         "src/providers/google.ts",
         "src/providers/github.ts"
     ],
@@ -22,8 +23,9 @@ export default defineConfig({
     clean: true,
     outDir: "dist",
     target: "node18",
-    splitting: false,
+    splitting: true, // Enable code splitting for better tree-shaking
     minify: true, // Enable minification
+    treeshake: true, // Enable tree-shaking
     external: [
         // Core peer dependencies
         "mongodb",
@@ -44,6 +46,14 @@ export default defineConfig({
         "react",
         "react-dom"
     ],
+    esbuildOptions(options) {
+        // Enable advanced minification
+        options.drop = ['console', 'debugger'];
+        options.legalComments = 'none';
+        options.treeShaking = true;
+        // Enable property mangling for better compression
+        options.mangleProps = /^_/;
+    },
     outExtension({ format }) {
         return {
             js: format === "cjs" ? ".cjs" : ".mjs"

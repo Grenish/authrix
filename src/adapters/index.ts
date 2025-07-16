@@ -1,3 +1,2 @@
-// Database adapters entry point
+// Database adapters entry point - import only what you need
 export { mongoAdapter } from "./mongo";
-export { postgresqlAdapter, initializePostgreSQLTables } from "./postgresql";

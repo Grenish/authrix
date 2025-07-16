@@ -6,7 +6,8 @@ let Pool: any = null;
 async function loadPgPool() {
   if (!Pool) {
     try {
-      const pgModule = await eval('import("pg")') as any;
+      // Use dynamic import without eval for better bundler compatibility
+      const pgModule = await import("pg");
       Pool = pgModule.Pool;
     } catch (error) {
       throw new Error(

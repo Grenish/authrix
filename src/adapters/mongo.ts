@@ -20,7 +20,7 @@ async function initMongoConnection() {
     const MONGO_URI = process.env.MONGO_URI;
     const DB_NAME = process.env.DB_NAME;
     const COLLECTION_NAME = process.env.AUTH_COLLECTION;
-    const TWO_FACTOR_COLLECTION = process.env.TWO_FACTOR_COLLECTION || 'two_factor_codes';
+    const TWO_FACTOR_COLLECTION = process.env.TWO_FACTOR_COLLECTION;
     
     if (!MONGO_URI || !DB_NAME || !COLLECTION_NAME) {
       throw new Error('Missing required environment variables: MONGO_URI, DB_NAME, AUTH_COLLECTION');
@@ -29,6 +29,9 @@ async function initMongoConnection() {
     await client.connect();
     const db = client.db(DB_NAME);
     users = db.collection(COLLECTION_NAME);
+    if (!TWO_FACTOR_COLLECTION) {
+      throw new Error('Missing required environment variable: TWO_FACTOR_COLLECTION');
+    }
     twoFactorCodes = db.collection(TWO_FACTOR_COLLECTION);
     
     // Create indexes for better performance
@@ -53,7 +56,7 @@ export const mongoAdapter: AuthDbAdapter = {
   async findUserByEmail(email: string): Promise<AuthUser | null> {
     await ensureConnection();
     const user = await users.findOne({ email: email.toLowerCase().trim() });
-    if (!user) return null;
+    if (!user || !user._id) return null;
 
     return {
       id: user._id.toString(),
@@ -74,7 +77,7 @@ export const mongoAdapter: AuthDbAdapter = {
     if (!ObjectId.isValid(id)) return null;
 
     const user = await users.findOne({ _id: new ObjectId(id) });
-    if (!user) return null;
+    if (!user || !user._id) return null;
 
     return {
       id: user._id.toString(),
@@ -117,6 +120,9 @@ export const mongoAdapter: AuthDbAdapter = {
       }
 
       const result = await users.insertOne(insertData);
+      if (!result.insertedId) {
+        throw new Error("Failed to create user: No ID generated");
+      }
 
       return {
         id: result.insertedId.toString(),
@@ -173,8 +179,7 @@ export const mongoAdapter: AuthDbAdapter = {
         { $set: updateData },
         { returnDocument: 'after' }
       );
-
-      if (!result || !result.value) {
+      if (!result || !result.value || !result.value._id) {
         throw new Error("User not found");
       }
 
@@ -207,7 +212,7 @@ export const mongoAdapter: AuthDbAdapter = {
     await ensureConnection();
     const normalizedUsername = username.toLowerCase().trim();
     const user = await users.findOne({ username: normalizedUsername });
-    if (!user) return null;
+    if (!user || !user._id) return null;
 
     return {
       id: user._id.toString(),

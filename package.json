@@ -2,6 +2,7 @@
   "name": "authrix",
   "version": "1.0.4",
   "description": "Lightweight, flexible authentication library for Node.js and TypeScript.",
+  "sideEffects": false,
   "keywords": [
     "authentication",
     "auth",
@@ -21,8 +22,8 @@
     "nodejs",
     "database-agnostic",
     "mongodb",
-    "supabase",
-    "firebase",
+    "postgresql",
+    "postgres",
     "security",
     "cookies",
     "bcrypt",
@@ -74,6 +75,16 @@
       "require": "./dist/oauth.cjs",
       "import": "./dist/oauth.mjs"
     },
+    "./sso": {
+      "types": "./dist/sso.d.ts",
+      "require": "./dist/sso.cjs",
+      "import": "./dist/sso.mjs"
+    },
+    "./forgotPassword": {
+      "types": "./dist/forgotPassword.d.ts",
+      "require": "./dist/forgotPassword.cjs",
+      "import": "./dist/forgotPassword.mjs"
+    },
     "./adapters": {
       "types": "./dist/adapters/index.d.ts",
       "require": "./dist/adapters/index.cjs",
@@ -84,15 +95,10 @@
       "require": "./dist/adapters/mongo.cjs",
       "import": "./dist/adapters/mongo.mjs"
     },
-    "./adapters/supabase": {
-      "types": "./dist/adapters/supabase.d.ts",
-      "require": "./dist/adapters/supabase.cjs",
-      "import": "./dist/adapters/supabase.mjs"
-    },
-    "./adapters/firebase": {
-      "types": "./dist/adapters/firebase.d.ts",
-      "require": "./dist/adapters/firebase.cjs",
-      "import": "./dist/adapters/firebase.mjs"
+    "./adapters/postgresql": {
+      "types": "./dist/adapters/postgresql.d.ts",
+      "require": "./dist/adapters/postgresql.cjs",
+      "import": "./dist/adapters/postgresql.mjs"
     },
     "./providers/google": {
       "types": "./dist/providers/google.d.ts",
@@ -133,40 +139,41 @@
   },
   "homepage": "https://github.com/Grenish/authrix#readme",
   "dependencies": {
+    "@sendgrid/mail": "^8.1.5",
+    "@types/nodemailer": "^6.4.17",
     "bcryptjs": "^3.0.2",
     "cookie": "^1.0.2",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^7.0.5",
+    "resend": "^4.6.0"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
-    "@supabase/supabase-js": "^2.50.4",
     "@types/bcryptjs": "^2.4.6",
     "@types/express": "^5.0.3",
     "@types/jest": "^30.0.0",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.0.12",
+    "@types/pg": "^8.11.10",
     "axios": "^1.10.0",
     "dotenv": "^17.2.0",
     "express": "^5.1.0",
-    "firebase": "^11.10.0",
-    "firebase-admin": "^13.4.0",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
     "mongodb": "^6.17.0",
+    "pg": "^8.12.0",
     "rimraf": "^6.0.1",
     "ts-jest": "^29.4.0",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
-    "@supabase/supabase-js": ">=2.0.0",
     "axios": ">=1.0.0",
     "dotenv": ">=16.0.0",
     "express": ">=4.0.0",
-    "firebase": ">=9.0.0",
-    "firebase-admin": ">=11.0.0",
     "mongodb": ">=5.0.0",
     "next": ">=13.0.0",
+    "pg": ">=8.0.0",
     "react": ">=16.8.0"
   },
   "peerDependenciesMeta": {
@@ -182,13 +189,7 @@
     "mongodb": {
       "optional": true
     },
-    "@supabase/supabase-js": {
-      "optional": true
-    },
-    "firebase": {
-      "optional": true
-    },
-    "firebase-admin": {
+    "pg": {
       "optional": true
     },
     "axios": {

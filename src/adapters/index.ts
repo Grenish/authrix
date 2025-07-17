@@ -1,4 +1,2 @@
-// Database adapters entry point
+// Database adapters entry point - import only what you need
 export { mongoAdapter } from "./mongo";
-export { supabaseAdapter } from "./supabase";
-export { firebaseAdapter } from "./firebase";

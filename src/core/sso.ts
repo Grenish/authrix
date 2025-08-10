@@ -208,7 +208,7 @@ export async function processSSOAuthentication(
   // Generate JWT token
   const tokenPayload: any = {
     id: existingUser.id,
-    email: existingUser.email,
+    email: existingUser.email, // Use the email from the user record, not the normalized one
     provider: ssoUser.provider
   };
 
@@ -222,7 +222,7 @@ export async function processSSOAuthentication(
   return {
     user: {
       id: existingUser.id,
-      email: existingUser.email,
+      email: existingUser.email, // Use the email from the user record, not the normalized one
       username: existingUser.username,
       firstName: existingUser.firstName,
       lastName: existingUser.lastName,

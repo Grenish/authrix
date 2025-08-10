@@ -98,6 +98,13 @@ function cleanExpiredCodes(): void {
   }
 }
 
+/**
+ * Clear rate limit store (for testing purposes)
+ */
+export function clearRateLimitStore(): void {
+  rateLimitStore.clear();
+}
+
 export interface ForgotPasswordOptions {
   codeLength?: number;
   codeExpiration?: number; // in minutes

@@ -15,7 +15,8 @@ jest.mock('mongodb', () => {
 
 const mockCollection = {
   findOne: jest.fn(),
-  insertOne: jest.fn()
+  insertOne: jest.fn(),
+  createIndex: jest.fn().mockResolvedValue(undefined)
 };
 
 const mockDb = {
@@ -44,8 +45,13 @@ describe('Mongo Adapter', () => {
       ...originalEnv,
       MONGO_URI: 'mongodb://localhost:27017',
       DB_NAME: 'test_db',
-      AUTH_COLLECTION: 'users'
+      AUTH_COLLECTION: 'users',
+      TWO_FACTOR_COLLECTION: 'two_factor_codes'
     };
+    
+    // Mock the collection methods properly
+    mockCollection.createIndex = jest.fn().mockResolvedValue(undefined);
+    
     MockMongoClient.mockImplementation(() => mockClient as any);
   });
 

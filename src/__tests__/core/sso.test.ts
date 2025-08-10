@@ -123,8 +123,12 @@ describe('SSO Core Functions', () => {
         password: 'hashedpassword123'
       };
       
+      // Clear any previous mock implementations
+      mockAdapter.findUserByEmail.mockReset();
+      
       mockAdapter.findUserByEmail.mockImplementation((email: string) => {
-        if (email === 'jane.doe@example.com') {
+        // Handle email normalization - the function normalizes to lowercase
+        if (email === 'jane.doe@example.com' || email === 'jane.doe@example.com'.toLowerCase()) {
           return Promise.resolve(existingUser);
         }
         return Promise.resolve(null);

@@ -45,7 +45,9 @@ describe('Forgot Password Functions', () => {
     
     // Set up default mock implementations
     mockAdapter.findUserByEmail.mockResolvedValue(null);
-    mockAdapter.updateUser.mockImplementation((id: any, updates: any) => Promise.resolve({
+    
+    // Add updateUser method to mock adapter
+    mockAdapter.updateUser = jest.fn().mockImplementation((id: any, updates: any) => Promise.resolve({
       id,
       email: 'test@example.com',
       ...updates
@@ -53,6 +55,12 @@ describe('Forgot Password Functions', () => {
 
     // Mock console.log to capture password reset codes
     jest.spyOn(console, 'log').mockImplementation(() => {});
+    
+    // Clear rate limiting store between tests
+    const { clearRateLimitStore } = require('../../core/forgotPassword');
+    if (clearRateLimitStore) {
+      clearRateLimitStore();
+    }
   });
 
   afterEach(() => {
@@ -244,9 +252,6 @@ describe('Forgot Password Functions', () => {
     });
 
     it('should prevent password reuse when enabled', async () => {
-      const { verifyPassword } = await import('../../utils/hash');
-      (verifyPassword as jest.MockedFunction<any>).mockResolvedValue(true);
-
       const testUser = {
         id: 'test-user-id',
         email: 'test@example.com',
@@ -264,6 +269,10 @@ describe('Forgot Password Functions', () => {
       );
       const codeMatch = logCall[0].match(/: (\d+)/);
       const resetCode = codeMatch ? codeMatch[1] : '123456';
+
+      // Mock the password verification to return true for the same password
+      const { verifyPassword } = await import('../../utils/hash');
+      jest.spyOn(await import('../../utils/hash'), 'verifyPassword').mockResolvedValue(true);
 
       await expect(resetPasswordWithCode(
         'test@example.com',
@@ -393,15 +402,27 @@ describe('Forgot Password Functions', () => {
       const originalUpdateUser = mockAdapter.updateUser;
       delete mockAdapter.updateUser;
       
-      mockAdapter.findUserByEmail.mockResolvedValue({
+      const testUser = {
         id: 'test-user-id',
         email: 'test@example.com',
         password: 'old_password'
-      });
+      };
+
+      mockAdapter.findUserByEmail.mockResolvedValue(testUser);
+
+      // First, initiate a password reset to create a valid code
+      await initiateForgotPassword('test@example.com');
+      
+      // Get the generated code from console.log
+      const logCall = (console.log as jest.MockedFunction<any>).mock.calls.find((call: any) => 
+        call[0].includes('[AUTHRIX] Password reset code')
+      );
+      const codeMatch = logCall[0].match(/: (.+)$/);
+      const resetCode = codeMatch ? codeMatch[1] : '123456';
 
       await expect(resetPasswordWithCode(
         'test@example.com',
-        '123456',
+        resetCode,
         'NewPassword123!'
       )).rejects.toThrow('Database adapter does not support password updates');
       

@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import { postgresqlAdapter, resetPostgreSQLConnection } from '../../adapters/postgresql';
 
 // Mock pg module
 const mockPool = {
@@ -13,8 +12,10 @@ const mockPg = {
 };
 
 // Mock the dynamic import
-const mockEval = jest.fn().mockResolvedValue(mockPg);
-global.eval = mockEval as any;
+jest.mock('pg', () => mockPg, { virtual: true });
+
+// Import after mocking
+import { postgresqlAdapter, resetPostgreSQLConnection } from '../../adapters/postgresql';
 
 describe('PostgreSQL Adapter', () => {
   beforeEach(() => {
@@ -507,7 +508,7 @@ describe('PostgreSQL Adapter', () => {
       });
 
       expect(mockPool.query).toHaveBeenCalledWith(
-        'SELECT * FROM custom_users WHERE LOWER(username) = $1 LIMIT 1',
+        'SELECT * FROM auth_users WHERE LOWER(username) = $1 LIMIT 1',
         ['testuser']
       );
     });
@@ -543,7 +544,7 @@ describe('PostgreSQL Adapter', () => {
       await postgresqlAdapter.findUserByUsername('TestUser');
 
       expect(mockPool.query).toHaveBeenCalledWith(
-        'SELECT * FROM custom_users WHERE LOWER(username) = $1 LIMIT 1',
+        'SELECT * FROM auth_users WHERE LOWER(username) = $1 LIMIT 1',
         ['testuser']
       );
     });

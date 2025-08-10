@@ -141,15 +141,34 @@ export async function initializePostgreSQLTables() {
   }
 }
 
-// Helper function to convert database row to AuthUser
+/**
+ * Check if error is a duplicate key error for a specific field
+ */
+function isDuplicateKeyError(error: any, field: string): boolean {
+  if (!error || typeof error.message !== 'string') return false;
+  
+  const message = error.message.toLowerCase();
+  const fieldLower = field.toLowerCase();
+  
+  return message.includes('duplicate key') && 
+         (message.includes(`${fieldLower}_idx`) || 
+          message.includes(`${fieldLower}_key`) ||
+          message.includes(`unique constraint`) && message.includes(fieldLower));
+}
+
+/**
+ * Convert database row to AuthUser
+ */
 function rowToUser(row: any): AuthUser {
+  if (!row) return null as any;
+  
   return {
     id: row.id,
     email: row.email,
+    password: row.password,
     username: row.username,
     firstName: row.first_name,
     lastName: row.last_name,
-    password: row.password,
     createdAt: row.created_at,
     emailVerified: row.email_verified,
     emailVerifiedAt: row.email_verified_at,
@@ -279,14 +298,15 @@ export const postgresqlAdapter: AuthDbAdapter = {
       return rowToUser(result.rows[0]);
     } catch (error) {
       console.error("Error creating user:", error);
-      if (error instanceof Error) {
-        if (error.message.includes('duplicate key') && error.message.includes('email')) {
-          throw new Error(`User with email ${email} already exists`);
-        }
-        if (error.message.includes('duplicate key') && error.message.includes('username')) {
-          throw new Error(`Username ${username} is already taken`);
-        }
+      
+      // Check for specific duplicate key errors
+      if (isDuplicateKeyError(error, 'email')) {
+        throw new Error(`User with email ${email} already exists`);
       }
+      if (isDuplicateKeyError(error, 'username')) {
+        throw new Error(`Username ${username} is already taken`);
+      }
+      
       throw new Error(`Failed to create user: ${error instanceof Error ? error.message : "Unknown error"}`);
     }
   },
@@ -357,14 +377,23 @@ export const postgresqlAdapter: AuthDbAdapter = {
       return rowToUser(result.rows[0]);
     } catch (error) {
       console.error("Error updating user:", error);
-      if (error instanceof Error) {
-        if (error.message.includes('duplicate key') && error.message.includes('email')) {
-          throw new Error(`Email ${data.email} is already in use`);
-        }
-        if (error.message.includes('duplicate key') && error.message.includes('username')) {
-          throw new Error(`Username ${data.username} is already taken`);
-        }
+      
+      // Check for specific duplicate key errors
+      if (isDuplicateKeyError(error, 'email')) {
+        throw new Error(`Email ${data.email || 'unknown'} is already in use`);
       }
+      if (isDuplicateKeyError(error, 'username')) {
+        throw new Error(`Username ${data.username || 'unknown'} is already taken`);
+      }
+      
+      // Re-throw specific errors
+      if (error instanceof Error && error.message === 'User not found') {
+        throw error;
+      }
+      if (error instanceof Error && error.message === 'No valid fields to update') {
+        throw error;
+      }
+      
       throw new Error(`Failed to update user: ${error instanceof Error ? error.message : "Unknown error"}`);
     }
   },

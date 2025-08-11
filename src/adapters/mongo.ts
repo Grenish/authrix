@@ -13,6 +13,8 @@ interface MongoUser {
   username?: string;
   firstName?: string;
   lastName?: string;
+  fullName?: string;
+  profilePicture?: string;
   lastLoginAt?: Date;
   loginCount?: number;
 }
@@ -208,7 +210,9 @@ function mongoUserToAuthUser(user: MongoUser & { _id: ObjectId }): AuthUser {
     twoFactorEnabled: user.twoFactorEnabled || false,
     username: user.username,
     firstName: user.firstName,
-    lastName: user.lastName,
+  lastName: user.lastName,
+  fullName: user.fullName,
+  profilePicture: user.profilePicture,
   };
 }
 
@@ -220,7 +224,7 @@ export const mongoAdapter: AuthDbAdapter = {
     
     const user = await users.findOne(
       { email: normalizeEmail(email) },
-      { 
+    { 
         projection: {
           _id: 1,
           email: 1,
@@ -231,7 +235,9 @@ export const mongoAdapter: AuthDbAdapter = {
           twoFactorEnabled: 1,
           username: 1,
           firstName: 1,
-          lastName: 1,
+      lastName: 1,
+      fullName: 1,
+      profilePicture: 1,
         }
       }
     );
@@ -247,7 +253,7 @@ export const mongoAdapter: AuthDbAdapter = {
     
     const user = await users.findOne(
       { _id: new ObjectId(id) },
-      { 
+    { 
         projection: {
           _id: 1,
           email: 1,
@@ -258,7 +264,9 @@ export const mongoAdapter: AuthDbAdapter = {
           twoFactorEnabled: 1,
           username: 1,
           firstName: 1,
-          lastName: 1,
+      lastName: 1,
+      fullName: 1,
+      profilePicture: 1,
         }
       }
     );
@@ -266,7 +274,7 @@ export const mongoAdapter: AuthDbAdapter = {
     return user && user._id ? mongoUserToAuthUser(user as MongoUser & { _id: ObjectId }) : null;
   },
 
-  async createUser({ email, password, username, firstName, lastName }): Promise<AuthUser> {
+  async createUser({ email, password, username, firstName, lastName, fullName, profilePicture }): Promise<AuthUser> {
     const conn = MongoConnection.getInstance();
     const users = await conn.getUsers();
     
@@ -283,9 +291,11 @@ export const mongoAdapter: AuthDbAdapter = {
       loginCount: 0,
     };
 
-    if (normalizedUsername) userData.username = normalizedUsername;
-    if (firstName) userData.firstName = firstName.trim();
-    if (lastName) userData.lastName = lastName.trim();
+  if (normalizedUsername) userData.username = normalizedUsername;
+  if (firstName) userData.firstName = firstName.trim();
+  if (lastName) userData.lastName = lastName.trim();
+  if (fullName) userData.fullName = fullName.trim();
+  if (profilePicture) userData.profilePicture = profilePicture;
 
     try {
       const result = await users.insertOne(userData);
@@ -304,6 +314,8 @@ export const mongoAdapter: AuthDbAdapter = {
         username: normalizedUsername,
         firstName: firstName?.trim(),
         lastName: lastName?.trim(),
+        fullName: fullName?.trim(),
+        profilePicture,
       };
     } catch (error: any) {
       if (error.code === 11000) {
@@ -333,8 +345,10 @@ export const mongoAdapter: AuthDbAdapter = {
     if (data.emailVerifiedAt !== undefined) updateData.emailVerifiedAt = data.emailVerifiedAt;
     if (data.twoFactorEnabled !== undefined) updateData.twoFactorEnabled = data.twoFactorEnabled;
     if (data.username !== undefined) updateData.username = normalizeUsername(data.username);
-    if (data.firstName !== undefined) updateData.firstName = data.firstName?.trim();
-    if (data.lastName !== undefined) updateData.lastName = data.lastName?.trim();
+  if (data.firstName !== undefined) updateData.firstName = data.firstName?.trim();
+  if (data.lastName !== undefined) updateData.lastName = data.lastName?.trim();
+  if (data.fullName !== undefined) updateData.fullName = data.fullName?.trim();
+  if (data.profilePicture !== undefined) updateData.profilePicture = data.profilePicture;
 
     try {
       const result = await users.findOneAndUpdate(
@@ -353,6 +367,8 @@ export const mongoAdapter: AuthDbAdapter = {
             username: 1,
             firstName: 1,
             lastName: 1,
+            fullName: 1,
+            profilePicture: 1,
           }
         }
       );
@@ -391,6 +407,8 @@ export const mongoAdapter: AuthDbAdapter = {
           username: 1,
           firstName: 1,
           lastName: 1,
+          fullName: 1,
+          profilePicture: 1,
         }
       }
     );

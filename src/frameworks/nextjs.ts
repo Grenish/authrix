@@ -1,5 +1,4 @@
-// Next.js utilities for Authrix
-// These imports are optional and will only work when Next.js is available
+// Next.js utilities for Authrix - Refactored and optimized version
 
 import { signupCore } from "../core/signup";
 import { signinCore } from "../core/signin";
@@ -7,569 +6,398 @@ import { logoutCore } from "../core/logout";
 import { getCurrentUserFromToken, isTokenValid } from "../core/session";
 import { authConfig } from "../config";
 
-let NextRequest: any, NextResponse: any, NextApiRequest: any, NextApiResponse: any, cookies: any;
-
-/**
- * Safely import Next.js headers module
- * This avoids eval() while still providing dynamic imports
- */
-function getNextHeaders(): any {
-  try {
-    // Use dynamic require to avoid bundler warnings
-    const requireFunc = typeof require !== 'undefined' ? require : null;
-    if (!requireFunc) {
-      throw new Error('require is not available');
-    }
-    return requireFunc('next/headers');
-  } catch (error) {
-    throw new Error(
-      `Next.js App Router functions require 'next/headers' to be available. ` +
-      `Make sure you're using Next.js 13+ with App Router and this function is called within a Server Component or API Route. ` +
-      `Original error: ${error instanceof Error ? error.message : 'Unknown error'}`
-    );
-  }
-}
-let isNextJsAvailable = false;
-let nextJsContext: 'app-router' | 'pages-router' | 'middleware' | 'unknown' = 'unknown';
-let detectionComplete = false;
-
-// Helper function to safely get cookie name with fallback
-function getSafeCookieName(): string {
-  try {
-    // Try to access authConfig, but provide fallback for Edge Runtime
-    return authConfig?.cookieName || 'auth_token';
-  } catch (error) {
-    // If authConfig is not available (Edge Runtime), use default
-    return 'auth_token';
-  }
+// Types
+interface NextJsModules {
+  NextRequest?: any;
+  NextResponse?: any;
+  NextApiRequest?: any;
+  NextApiResponse?: any;
+  cookies?: any;
+  headers?: any;
 }
 
-// Improved Next.js detection that works in various environments
-function detectNextJsEnvironment() {
-  if (detectionComplete) {
-    return;
-  }
-
-  try {
-    // Method 1: Try dynamic import approach (works better in bundled environments)
-    let nextServerModule: any;
-    let nextModule: any;
-    let nextHeadersModule: any;
-
-    // Check if we're in a Node.js environment with require
-    if (typeof require !== 'undefined') {
-      try {
-        // Check for Next.js core availability
-        require.resolve('next');
-        isNextJsAvailable = true;
-      } catch (error) {
-        // Try alternative detection methods
-      }
-
-      if (isNextJsAvailable) {
-        try {
-          nextServerModule = require("next/server");
-          NextRequest = nextServerModule.NextRequest;
-          NextResponse = nextServerModule.NextResponse;
-        } catch (error) {
-          // Next.js server components not available
-        }
-
-        try {
-          nextModule = require("next");
-          NextApiRequest = nextModule.NextApiRequest;
-          NextApiResponse = nextModule.NextApiResponse;
-        } catch (error) {
-          // Next.js pages router not available
-        }
-
-        try {
-          nextHeadersModule = require("next/headers");
-          cookies = nextHeadersModule.cookies;
-        } catch (error) {
-          // Next.js headers not available
-          cookies = null;
-        }
-      }
-    }
-
-    // Method 2: Check for global Next.js objects (in browser/Edge Runtime)
-    if (!isNextJsAvailable) {
-      // Check if we're in a Next.js environment by looking for globals
-      if (typeof globalThis !== 'undefined') {
-        // Look for Next.js specific globals
-        const hasNextGlobals = 
-          (globalThis as any).__NEXT_DATA__ ||
-          (globalThis as any).__next ||
-          (globalThis as any).next;
-        
-        if (hasNextGlobals) {
-          isNextJsAvailable = true;
-        }
-      }
-
-      // Check for process.env.NEXT_RUNTIME (available in Next.js environments)
-      if (typeof process !== 'undefined' && process.env?.NEXT_RUNTIME) {
-        isNextJsAvailable = true;
-      }
-
-      // Check for Next.js specific environment variables
-      if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_VERCEL_URL) {
-        isNextJsAvailable = true;
-      }
-    }
-
-    // Method 3: Try to detect based on available APIs
-    if (!isNextJsAvailable) {
-      try {
-        // If we can create these constructors, we might be in Next.js
-        if (typeof Request !== 'undefined' && typeof Response !== 'undefined') {
-          // This is a weaker signal but might indicate a Next.js environment
-          // We'll mark as potentially available but won't set the flag definitively
-        }
-      } catch (error) {
-        // Not in a Web API environment
-      }
-    }
-
-    // Determine context based on available APIs
-    if (isNextJsAvailable) {
-      // Determine the context
-      if (cookies && typeof cookies === 'function') {
-        nextJsContext = 'app-router';
-      } else if (NextApiRequest && NextApiResponse) {
-        nextJsContext = 'pages-router';
-      } else if (NextRequest && NextResponse) {
-        nextJsContext = 'middleware';
-      } else {
-        // Try to detect context by environment
-        if (typeof process !== 'undefined') {
-          if (process.env.NEXT_RUNTIME === 'edge') {
-            nextJsContext = 'middleware';
-          } else if (process.env.NEXT_RUNTIME === 'nodejs') {
-            nextJsContext = 'app-router'; // Likely App Router
-          }
-        }
-      }
-    }
-
-    detectionComplete = true;
-  } catch (error) {
-    // Fallback: assume not available
-    isNextJsAvailable = false;
-    nextJsContext = 'unknown';
-    detectionComplete = true;
-  }
-}
-
-// Lazy detection function that runs when actually needed
-function ensureDetection() {
-  if (!detectionComplete) {
-    detectNextJsEnvironment();
-  }
-}
-
-// Run initial detection
-detectNextJsEnvironment();
-
-// Helper function to check if Next.js is available and provide better error messages
-function ensureNextJs(feature: string) {
-  // Ensure detection has run
-  ensureDetection();
-  
-  if (!isNextJsAvailable) {
-    throw new Error(
-      `${feature} requires Next.js to be installed and properly configured.\n` +
-      `Please check:\n` +
-      `1. Next.js is installed: npm install next\n` +
-      `2. You're running this code in a Next.js environment\n` +
-      `3. Your bundler is configured to handle Next.js modules\n` +
-      `\nIf you're using Authrix outside of Next.js, consider using the universal functions from 'authrix/universal'.`
-    );
-  }
-  
-  // Provide context-specific guidance
-  if (feature.includes('NextApp') && nextJsContext !== 'app-router' && !cookies) {
-    throw new Error(
-      `${feature} requires Next.js App Router with 'next/headers' support. ` +
-      `Current context: ${nextJsContext}. ` +
-      `This function should be called from a Server Component, Server Action, or Route Handler in the App Router. ` +
-      `If you're using Pages Router, use the 'NextPages' equivalent function instead. ` +
-      `If you're not in a Next.js context, use the universal functions from 'authrix/universal'.`
-    );
-  }
-}
-
-/**
- * Get information about the detected Next.js environment
- * Useful for debugging Next.js detection issues
- */
-export function getNextJsEnvironmentInfo() {
-  // Ensure detection has run
-  ensureDetection();
-  
-  return {
-    isNextJsAvailable,
-    context: nextJsContext,
-    hasAppRouterSupport: !!cookies,
-    hasPagesRouterSupport: !!(NextApiRequest && NextApiResponse),
-    hasMiddlewareSupport: !!(NextRequest && NextResponse),
-    detectionComplete,
-    runtimeInfo: {
-      hasRequire: typeof require !== 'undefined',
-      hasGlobalThis: typeof globalThis !== 'undefined',
-      hasProcess: typeof process !== 'undefined',
-      nextRuntime: typeof process !== 'undefined' ? process.env?.NEXT_RUNTIME : undefined,
-      hasNextData: typeof globalThis !== 'undefined' ? !!(globalThis as any).__NEXT_DATA__ : false
-    }
+interface EnvironmentInfo {
+  isNextJsAvailable: boolean;
+  context: 'app-router' | 'pages-router' | 'middleware' | 'unknown';
+  hasAppRouterSupport: boolean;
+  hasPagesRouterSupport: boolean;
+  hasMiddlewareSupport: boolean;
+  detectionComplete: boolean;
+  runtimeInfo: {
+    hasRequire: boolean;
+    hasProcess: boolean;
+    hasGlobalThis: boolean;
+    hasNextData: boolean;
+    nextRuntime?: string;
   };
 }
 
-// Next.js App Router utilities
+// Module cache for better performance
+class ModuleLoader {
+  private static cache: NextJsModules = {};
+  private static detectionComplete = false;
+  private static environmentInfo: EnvironmentInfo = {
+    isNextJsAvailable: false,
+    context: 'unknown',
+    hasAppRouterSupport: false,
+    hasPagesRouterSupport: false,
+    hasMiddlewareSupport: false,
+    detectionComplete: false,
+    runtimeInfo: {
+      hasRequire: false,
+      hasProcess: false,
+      hasGlobalThis: false,
+      hasNextData: false,
+    }
+  };
 
-/**
- * Sign up a user in Next.js App Router
- */
-export async function signupNextApp(email: string, password: string) {
-  try {
-    const result = await signupCore(email, password);
-    
-    // Try to import and use cookies() dynamically
+  static async loadModules(): Promise<NextJsModules> {
+    if (this.detectionComplete) {
+      return this.cache;
+    }
+
+    // Update runtime info
+    this.environmentInfo.runtimeInfo = {
+      hasRequire: typeof require !== 'undefined',
+      hasProcess: typeof process !== 'undefined',
+      hasGlobalThis: typeof globalThis !== 'undefined',
+      hasNextData: typeof (globalThis as any).__NEXT_DATA__ !== 'undefined',
+      nextRuntime: typeof process !== 'undefined' ? process.env?.NEXT_RUNTIME : undefined,
+    };
+
     try {
-      // Use require for better compatibility
-      const nextHeaders = require("next/headers");
-      const cookieStore = nextHeaders.cookies();
-      cookieStore.set(authConfig.cookieName, result.token, result.cookieOptions);
-      return result.user;
-    } catch (importError) {
-      // If next/headers fails to import, throw a helpful error
-      throw new Error(
-        `Next.js App Router functions require 'next/headers' to be available. ` +
-        `This function must be called from a Server Component, Server Action, or Route Handler in Next.js App Router. ` +
-        `If you're in an API route or Pages Router, use signupNextPages instead. ` +
-        `If you want to handle cookies manually, use signupCore and handle the cookie setting yourself.`
-      );
+      // Check if we're in a Node.js environment
+      if (typeof require !== 'undefined') {
+        // Try loading Next.js modules
+        try {
+          const nextServer = require('next/server');
+          this.cache.NextRequest = nextServer.NextRequest;
+          this.cache.NextResponse = nextServer.NextResponse;
+          this.environmentInfo.hasMiddlewareSupport = true;
+          this.environmentInfo.isNextJsAvailable = true;
+        } catch {}
+
+        try {
+          const nextHeaders = require('next/headers');
+          this.cache.cookies = nextHeaders.cookies;
+          this.cache.headers = nextHeaders.headers;
+          this.environmentInfo.hasAppRouterSupport = true;
+          this.environmentInfo.isNextJsAvailable = true;
+        } catch {}
+
+        // Check environment context
+        if (this.cache.cookies) {
+          this.environmentInfo.context = 'app-router';
+        } else if (this.cache.NextRequest && this.cache.NextResponse) {
+          this.environmentInfo.context = 'middleware';
+        } else {
+          this.environmentInfo.context = 'pages-router';
+          this.environmentInfo.hasPagesRouterSupport = true;
+        }
+      }
+    } catch (error) {
+      console.debug('Next.js module loading failed:', error);
     }
-  } catch (error) {
-    // Re-throw with context if it's not already our custom error
-    if (error instanceof Error && error.message.includes('next/headers')) {
-      throw error;
-    }
-    throw new Error(`Signup failed: ${error instanceof Error ? error.message : String(error)}`);
+
+    this.detectionComplete = true;
+    this.environmentInfo.detectionComplete = true;
+    return this.cache;
+  }
+
+  static getEnvironmentInfo(): EnvironmentInfo {
+    return { ...this.environmentInfo };
+  }
+
+  static reset(): EnvironmentInfo {
+    this.cache = {};
+    this.detectionComplete = false;
+    this.environmentInfo = {
+      isNextJsAvailable: false,
+      context: 'unknown',
+      hasAppRouterSupport: false,
+      hasPagesRouterSupport: false,
+      hasMiddlewareSupport: false,
+      detectionComplete: false,
+      runtimeInfo: {
+        hasRequire: typeof require !== 'undefined',
+        hasProcess: typeof process !== 'undefined',
+        hasGlobalThis: typeof globalThis !== 'undefined',
+        hasNextData: typeof (globalThis as any).__NEXT_DATA__ !== 'undefined',
+        nextRuntime: typeof process !== 'undefined' ? process.env?.NEXT_RUNTIME : undefined,
+      }
+    };
+    
+    // Re-run detection
+    this.loadModules();
+    return this.getEnvironmentInfo();
   }
 }
 
-/**
- * Sign in a user in Next.js App Router
- */
-export async function signinNextApp(email: string, password: string) {
-  try {
-    const result = await signinCore(email, password);
-    
-    // Try to import and use cookies() dynamically
+// Cookie utilities
+class CookieUtils {
+  static getCookieName(): string {
     try {
-      // Use require for better compatibility
-      const nextHeaders = require("next/headers");
-      const cookieStore = nextHeaders.cookies();
-      cookieStore.set(authConfig.cookieName, result.token, result.cookieOptions);
-      return result.user;
-    } catch (importError) {
-      // If next/headers fails to import, throw a helpful error
-      throw new Error(
-        `Next.js App Router functions require 'next/headers' to be available. ` +
-        `This function must be called from a Server Component, Server Action, or Route Handler in Next.js App Router. ` +
-        `If you're in an API route or Pages Router, use signinNextPages instead. ` +
-        `If you want to handle cookies manually, use signinCore and handle the cookie setting yourself.`
-      );
+      return authConfig?.cookieName || 'auth_token';
+    } catch {
+      return 'auth_token';
     }
-  } catch (error) {
-    // Re-throw with context if it's not already our custom error
-    if (error instanceof Error && error.message.includes('next/headers')) {
-      throw error;
-    }
-    throw new Error(`Signin failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  static createCookieString(
+    name: string,
+    value: string,
+    options: {
+      maxAge?: number;
+      expires?: Date;
+      path?: string;
+      secure?: boolean;
+      sameSite?: 'strict' | 'lax' | 'none';
+      httpOnly?: boolean;
+    } = {}
+  ): string {
+    const parts = [`${name}=${value}`];
+
+    if (options.httpOnly !== false) parts.push('HttpOnly');
+    if (options.path) parts.push(`Path=${options.path}`);
+    if (options.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`);
+    if (options.expires) parts.push(`Expires=${options.expires.toUTCString()}`);
+    if (options.sameSite) parts.push(`SameSite=${options.sameSite}`);
+    if (options.secure) parts.push('Secure');
+
+    return parts.join('; ');
+  }
+
+  static createLogoutCookie(name: string): string {
+    return this.createCookieString(name, '', {
+      expires: new Date(0),
+      path: '/',
+      httpOnly: true
+    });
   }
 }
 
-/**
- * Log out a user in Next.js App Router
- */
-export function logoutNextApp() {
-  try {
-    const result = logoutCore();
-    
-    // Try to import and use cookies() dynamically
-    try {
-      // Use safe dynamic import instead of eval
-      const nextHeaders = getNextHeaders();
-      const cookieStore = nextHeaders.cookies();
-      cookieStore.set(authConfig.cookieName, "", result.cookieOptions);
-      return { message: result.message };
-    } catch (importError) {
-      // If next/headers fails to import, throw a helpful error
-      throw new Error(
-        `Next.js App Router functions require 'next/headers' to be available. ` +
-        `This function must be called from a Server Component, Server Action, or Route Handler in Next.js App Router. ` +
-        `If you're in an API route or Pages Router, use logoutNextPages instead. ` +
-        `If you want to handle cookies manually, use logoutCore and handle the cookie clearing yourself.`
-      );
-    }
-  } catch (error) {
-    // Re-throw with context if it's not already our custom error
-    if (error instanceof Error && error.message.includes('next/headers')) {
-      throw error;
-    }
-    throw new Error(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Get current user in Next.js App Router
- */
-export async function getCurrentUserNextApp() {
-  try {
-    // Try to import and use cookies() dynamically
-    try {
-      // Use safe dynamic import instead of eval
-      const nextHeaders = getNextHeaders();
-      const cookieStore = nextHeaders.cookies();
-      const token = cookieStore.get(authConfig.cookieName)?.value || null;
-      return getCurrentUserFromToken(token);
-    } catch (importError) {
-      // If next/headers fails to import, throw a helpful error
-      throw new Error(
-        `Next.js App Router functions require 'next/headers' to be available. ` +
-        `This function must be called from a Server Component, Server Action, or Route Handler in Next.js App Router. ` +
-        `If you're in an API route or Pages Router, use getCurrentUserNextPages instead. ` +
-        `If you want to handle token extraction manually, use getCurrentUserFromToken with manual token extraction.`
-      );
-    }
-  } catch (error) {
-    // Re-throw with context if it's not already our custom error
-    if (error instanceof Error && error.message.includes('next/headers')) {
-      throw error;
-    }
-    throw new Error(`Get current user failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Check if user is authenticated in Next.js App Router
- */
-export async function isAuthenticatedNextApp(): Promise<boolean> {
-  try {
-    // Try to import and use cookies() dynamically
-    try {
-      // Use safe dynamic import instead of eval
-      const nextHeaders = getNextHeaders();
-      const cookieStore = nextHeaders.cookies();
-      const token = cookieStore.get(authConfig.cookieName)?.value || null;
-      return isTokenValid(token);
-    } catch (importError) {
-      // If next/headers fails to import, return false
-      console.warn('Next.js headers not available, assuming not authenticated');
-      return false;
-    }
-  } catch (error) {
-    console.error('Authentication check failed:', error);
-    return false;
-  }
-}
-
-// Next.js Pages Router (API Routes) utilities
-
-/**
- * Sign up a user in Next.js Pages Router API
- */
-export async function signupNextPages(email: string, password: string, res: any) {
-  try {
-    const result = await signupCore(email, password);
-    
-    if (!res || typeof res.setHeader !== 'function') {
-      throw new Error(
-        'signupNextPages requires a valid Next.js API response object. ' +
-        'Make sure you are calling this function from within a Next.js API route handler. ' +
-        'If you want to handle cookies manually, use signupCore instead.'
-      );
-    }
-    
-    // Set cookie using Next.js API response
-    res.setHeader(
-      "Set-Cookie",
-      `${authConfig.cookieName}=${result.token}; HttpOnly; Path=/; Max-Age=${result.cookieOptions.maxAge}; SameSite=Lax${
-        result.cookieOptions.secure ? "; Secure" : ""
-      }`
-    );
-    
-    return result.user;
-  } catch (error) {
-    throw new Error(`Signup failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Sign in a user in Next.js Pages Router API
- */
-export async function signinNextPages(email: string, password: string, res: any) {
-  try {
-    const result = await signinCore(email, password);
-    
-    if (!res || typeof res.setHeader !== 'function') {
-      throw new Error(
-        'signinNextPages requires a valid Next.js API response object. ' +
-        'Make sure you are calling this function from within a Next.js API route handler. ' +
-        'If you want to handle cookies manually, use signinCore instead.'
-      );
-    }
-    
-    // Set cookie using Next.js API response
-    res.setHeader(
-      "Set-Cookie",
-      `${authConfig.cookieName}=${result.token}; HttpOnly; Path=/; Max-Age=${result.cookieOptions.maxAge}; SameSite=Lax${
-        result.cookieOptions.secure ? "; Secure" : ""
-      }`
-    );
-    
-    return result.user;
-  } catch (error) {
-    throw new Error(`Signin failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Log out a user in Next.js Pages Router API
- */
-export function logoutNextPages(res: any) {
-  try {
-    const result = logoutCore();
-    
-    if (!res || typeof res.setHeader !== 'function') {
-      throw new Error(
-        'logoutNextPages requires a valid Next.js API response object. ' +
-        'Make sure you are calling this function from within a Next.js API route handler. ' +
-        'If you want to handle cookies manually, use logoutCore instead.'
-      );
-    }
-    
-    // Clear cookie using Next.js API response
-    res.setHeader(
-      "Set-Cookie",
-      `${authConfig.cookieName}=; HttpOnly; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax${
-        result.cookieOptions.secure ? "; Secure" : ""
-      }`
-    );
-    
-    return { message: result.message };
-  } catch (error) {
-    throw new Error(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Get current user in Next.js Pages Router API
- */
-export async function getCurrentUserNextPages(req: any) {
-  try {
-    if (!req || !req.cookies) {
-      throw new Error(
-        'getCurrentUserNextPages requires a valid Next.js API request object with cookies. ' +
-        'Make sure you are calling this function from within a Next.js API route handler. ' +
-        'If you want to handle token extraction manually, use getCurrentUserFromToken instead.'
-      );
-    }
-    
-    const token = req.cookies[authConfig.cookieName] || null;
-    return getCurrentUserFromToken(token);
-  } catch (error) {
-    throw new Error(`Get current user failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Check if user is authenticated in Next.js Pages Router API
- */
-export async function isAuthenticatedNextPages(req: any): Promise<boolean> {
-  try {
-    if (!req || !req.cookies) {
-      console.warn('isAuthenticatedNextPages: Invalid request object, assuming not authenticated');
-      return false;
-    }
-    
-    const token = req.cookies[authConfig.cookieName] || null;
-    return isTokenValid(token);
-  } catch (error) {
-    console.error('Authentication check failed:', error);
-    return false;
-  }
-}
-
-// Next.js Middleware utilities
-
-/**
- * Edge Runtime compatible JWT structure validation
- * This is a lightweight check that doesn't require Node.js crypto APIs
- */
-function isValidJWTStructure(token: string): boolean {
-  if (!token || typeof token !== 'string') {
-    return false;
-  }
-  
-  const parts = token.split('.');
-  if (parts.length !== 3) {
-    return false;
-  }
-  
-  // Check if all parts have content
-  return parts.every(part => part.length > 0);
-}
-
-/**
- * Basic JWT payload extraction for Edge Runtime
- * WARNING: This does NOT verify the signature - use only for non-critical operations
- */
-function extractJWTPayloadUnsafe(token: string): any {
-  try {
+// JWT utilities for Edge Runtime
+class JWTUtils {
+  static isValidStructure(token: string): boolean {
+    if (!token || typeof token !== 'string') return false;
     const parts = token.split('.');
-    if (parts.length !== 3) {
+    return parts.length === 3 && parts.every(part => part.length > 0);
+  }
+
+  static extractPayload(token: string): any {
+    try {
+      if (!this.isValidStructure(token)) return null;
+      
+      const payload = token.split('.')[1];
+      const padded = payload + '='.repeat((4 - payload.length % 4) % 4);
+      const decoded = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+      return JSON.parse(decoded);
+    } catch {
       return null;
     }
+  }
+
+  static isExpired(token: string): boolean {
+    const payload = this.extractPayload(token);
+    if (!payload?.exp) return true;
+    return Math.floor(Date.now() / 1000) >= payload.exp;
+  }
+}
+
+// Error messages
+const ErrorMessages = {
+  APP_ROUTER_REQUIRED: (method: string) => 
+    `${method} requires Next.js App Router context. ` +
+    `Call this from a Server Component, Server Action, or Route Handler. ` +
+    `For Pages Router, use the 'NextPages' variant instead.`,
+  
+  PAGES_ROUTER_REQUIRED: (method: string) =>
+    `${method} requires a valid Next.js API response object. ` +
+    `Call this from a Next.js API route handler with (req, res) parameters.`,
+  
+  COOKIE_SET_FAILED: (method: string) =>
+    `${method} failed to set authentication cookie. ` +
+    `Use the Core variant for manual cookie handling.`,
+  
+  NOT_AVAILABLE: 'Next.js is not available in this environment.'
+};
+
+// === App Router Functions ===
+
+export async function signupNextApp(email: string, password: string) {
+  const result = await signupCore(email, password);
+  
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (!modules.cookies) {
+      throw new Error(ErrorMessages.APP_ROUTER_REQUIRED('signupNextApp'));
+    }
     
-    const payload = parts[1];
-    // Add padding if needed for base64 decoding
-    const padded = payload + '='.repeat((4 - payload.length % 4) % 4);
-    const decoded = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
-    return JSON.parse(decoded);
+    const cookieStore = modules.cookies();
+    cookieStore.set(CookieUtils.getCookieName(), result.token, result.cookieOptions);
+    return result.user;
   } catch (error) {
+    if (error instanceof Error && error.message.includes('Next.js')) {
+      throw error;
+    }
+    throw new Error(ErrorMessages.COOKIE_SET_FAILED('signupNextApp'));
+  }
+}
+
+export async function signinNextApp(email: string, password: string) {
+  const result = await signinCore(email, password);
+  
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (!modules.cookies) {
+      throw new Error(ErrorMessages.APP_ROUTER_REQUIRED('signinNextApp'));
+    }
+    
+    const cookieStore = modules.cookies();
+    cookieStore.set(CookieUtils.getCookieName(), result.token, result.cookieOptions);
+    return result.user;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Next.js')) {
+      throw error;
+    }
+    throw new Error(ErrorMessages.COOKIE_SET_FAILED('signinNextApp'));
+  }
+}
+
+export async function logoutNextApp() {
+  const result = logoutCore();
+  
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (!modules.cookies) {
+      throw new Error(ErrorMessages.APP_ROUTER_REQUIRED('logoutNextApp'));
+    }
+    
+    const cookieStore = modules.cookies();
+    // Use the first cookie to clear (which should be the auth cookie)
+    const cookieToSet = result.cookiesToClear[0];
+    if (cookieToSet) {
+      cookieStore.set(cookieToSet.name, "", cookieToSet.options);
+    }
+    return { message: result.message };
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Next.js')) {
+      throw error;
+    }
+    throw new Error(ErrorMessages.COOKIE_SET_FAILED('logoutNextApp'));
+  }
+}
+
+export async function getCurrentUserNextApp() {
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (!modules.cookies) {
+      throw new Error(ErrorMessages.APP_ROUTER_REQUIRED('getCurrentUserNextApp'));
+    }
+    
+    const cookieStore = modules.cookies();
+    const token = cookieStore.get(CookieUtils.getCookieName())?.value || null;
+    return getCurrentUserFromToken(token);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Next.js')) {
+      throw error;
+    }
     return null;
   }
 }
 
-/**
- * Edge Runtime compatible basic token expiration check
- * WARNING: This does NOT verify the signature - use only for non-critical operations
- */
-function isTokenExpiredUnsafe(token: string): boolean {
-  const payload = extractJWTPayloadUnsafe(token);
-  if (!payload || !payload.exp) {
-    return true; // Consider invalid tokens as expired
+export async function isAuthenticatedNextApp(): Promise<boolean> {
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (!modules.cookies) return false;
+    
+    const cookieStore = modules.cookies();
+    const token = cookieStore.get(CookieUtils.getCookieName())?.value || null;
+    return isTokenValid(token);
+  } catch {
+    return false;
   }
-  
-  const now = Math.floor(Date.now() / 1000);
-  return payload.exp < now;
 }
 
-/**
- * Check authentication in Next.js middleware (Edge Runtime Compatible)
- * This version only performs basic token structure validation and expiration checks
- * without verifying the JWT signature or making database calls
- */
-export async function checkAuthMiddleware(request: any, options: { 
-  cookieName?: string;
-} = {}) {
-  const cookieName = options.cookieName || getSafeCookieName();
-  const token = request.cookies.get(cookieName)?.value || null;
+// === Pages Router Functions ===
+
+export async function signupNextPages(
+  email: string, 
+  password: string, 
+  res: any
+) {
+  if (!res?.setHeader) {
+    throw new Error(ErrorMessages.PAGES_ROUTER_REQUIRED('signupNextPages'));
+  }
   
-  // Basic token validation for Edge Runtime
+  const result = await signupCore(email, password);
+  const cookie = CookieUtils.createCookieString(
+    CookieUtils.getCookieName(),
+    result.token,
+    result.cookieOptions
+  );
+  
+  res.setHeader('Set-Cookie', cookie);
+  return result.user;
+}
+
+export async function signinNextPages(
+  email: string,
+  password: string,
+  res: any
+) {
+  if (!res?.setHeader) {
+    throw new Error(ErrorMessages.PAGES_ROUTER_REQUIRED('signinNextPages'));
+  }
+  
+  const result = await signinCore(email, password);
+  const cookie = CookieUtils.createCookieString(
+    CookieUtils.getCookieName(),
+    result.token,
+    result.cookieOptions
+  );
+  
+  res.setHeader('Set-Cookie', cookie);
+  return result.user;
+}
+
+export function logoutNextPages(res: any) {
+  if (!res?.setHeader) {
+    throw new Error(ErrorMessages.PAGES_ROUTER_REQUIRED('logoutNextPages'));
+  }
+  
+  const result = logoutCore();
+  const cookie = CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
+  
+  res.setHeader('Set-Cookie', cookie);
+  return { message: result.message };
+}
+
+export async function getCurrentUserNextPages(req: any) {
+  if (!req?.cookies) {
+    throw new Error('getCurrentUserNextPages requires a request object with cookies');
+  }
+  
+  const token = req.cookies[CookieUtils.getCookieName()] || null;
+  return getCurrentUserFromToken(token);
+}
+
+export async function isAuthenticatedNextPages(req: any): Promise<boolean> {
+  if (!req?.cookies) return false;
+  
+  const token = req.cookies[CookieUtils.getCookieName()] || null;
+  return isTokenValid(token);
+}
+
+// === Middleware Functions ===
+
+export async function checkAuthMiddleware(
+  request: any,
+  options: { cookieName?: string } = {}
+) {
+  const cookieName = options.cookieName || CookieUtils.getCookieName();
+  const token = request.cookies?.get(cookieName)?.value || null;
+  
   if (!token) {
     return {
       isAuthenticated: false,
@@ -578,8 +406,7 @@ export async function checkAuthMiddleware(request: any, options: {
     };
   }
   
-  // Check JWT structure
-  if (!isValidJWTStructure(token)) {
+  if (!JWTUtils.isValidStructure(token)) {
     return {
       isAuthenticated: false,
       user: null,
@@ -587,8 +414,7 @@ export async function checkAuthMiddleware(request: any, options: {
     };
   }
   
-  // Check expiration (without signature verification)
-  if (isTokenExpiredUnsafe(token)) {
+  if (JWTUtils.isExpired(token)) {
     return {
       isAuthenticated: false,
       user: null,
@@ -596,8 +422,7 @@ export async function checkAuthMiddleware(request: any, options: {
     };
   }
   
-  // Extract user info from token (without signature verification)
-  const payload = extractJWTPayloadUnsafe(token);
+  const payload = JWTUtils.extractPayload(token);
   const user = payload ? {
     id: payload.id,
     email: payload.email,
@@ -611,45 +436,31 @@ export async function checkAuthMiddleware(request: any, options: {
   };
 }
 
-/**
- * Edge Runtime compatible middleware function that validates tokens server-side
- * This version makes an API call to validate the token properly with signature verification
- */
-export async function checkAuthMiddlewareSecure(request: any, options: { 
-  validationEndpoint?: string;
-  timeout?: number;
-  cookieName?: string;
-} = {}) {
-  const cookieName = options.cookieName || getSafeCookieName();
-  const token = request.cookies.get(cookieName)?.value || null;
+export async function checkAuthMiddlewareSecure(
+  request: any,
+  options: {
+    validationEndpoint?: string;
+    timeout?: number;
+    cookieName?: string;
+  } = {}
+) {
+  const result = await checkAuthMiddleware(request, options);
   
-  if (!token) {
-    return {
-      isAuthenticated: false,
-      user: null,
-      reason: 'No token provided'
-    };
-  }
-  
-  // Basic structure check first
-  if (!isValidJWTStructure(token)) {
-    return {
-      isAuthenticated: false,
-      user: null,
-      reason: 'Invalid token structure'
-    };
+  if (!result.isAuthenticated) {
+    return result;
   }
   
   try {
-    // Validate token via API call
-    const validationUrl = options.validationEndpoint || '/api/auth/validate';
-    const baseUrl = request.nextUrl.origin;
+    const cookieName = options.cookieName || CookieUtils.getCookieName();
+    const token = request.cookies?.get(cookieName)?.value;
     
-    // Create AbortController for timeout - Edge Runtime compatible
+    if (!token) return result;
+    
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, options.timeout || 5000);
+    const timeoutId = setTimeout(() => controller.abort(), options.timeout || 5000);
+    
+    const validationUrl = options.validationEndpoint || '/api/auth/validate';
+    const baseUrl = request.nextUrl?.origin || request.url?.split('/').slice(0, 3).join('/');
     
     const response = await fetch(`${baseUrl}${validationUrl}`, {
       method: 'POST',
@@ -660,7 +471,6 @@ export async function checkAuthMiddlewareSecure(request: any, options: {
       signal: controller.signal
     });
     
-    // Clear timeout if request completes successfully
     clearTimeout(timeoutId);
     
     if (response.ok) {
@@ -670,207 +480,376 @@ export async function checkAuthMiddlewareSecure(request: any, options: {
         user: data.user,
         reason: 'Token validated via API'
       };
-    } else {
-      return {
-        isAuthenticated: false,
-        user: null,
-        reason: 'Token validation failed'
-      };
     }
-  } catch (error) {
-    // Fallback to basic validation if API call fails
-    const payload = extractJWTPayloadUnsafe(token);
-    const user = payload ? {
-      id: payload.id,
-      email: payload.email,
-      createdAt: payload.createdAt ? new Date(payload.createdAt) : undefined
-    } : null;
     
-    return {
-      isAuthenticated: !!user,
-      user,
-      reason: 'Fallback validation (API unavailable)'
-    };
+    return result; // Fallback to basic validation
+  } catch {
+    return result; // Fallback to basic validation
   }
 }
 
-// Higher-order function for protecting Next.js API routes
+// === Higher-Order Functions ===
+
 export function withAuth<T extends Record<string, any>, U extends Record<string, any>>(
-  handler: (req: T & { user: { id: string; email: string; createdAt?: Date } }, res: U) => Promise<void> | void
+  handler: (req: T & { user: any }, res: U) => Promise<void> | void
 ) {
   return async (req: T, res: U) => {
     try {
       const user = await getCurrentUserNextPages(req);
       
       if (!user) {
-        return (res as any).status(401).json({ 
-          success: false, 
+        return (res as any).status(401).json({
+          success: false,
           error: { message: "Authentication required" }
         });
       }
       
-      // Add user to request object
       (req as any).user = user;
-      
       return handler(req as T & { user: typeof user }, res);
     } catch (error) {
       console.error("Authentication error:", error);
-      return (res as any).status(500).json({ 
-        success: false, 
+      return (res as any).status(500).json({
+        success: false,
         error: { message: "Authentication failed" }
       });
     }
   };
 }
 
-// === FLEXIBLE NEXT.JS FUNCTIONS ===
-// These functions provide better compatibility across different Next.js contexts
+// === Flexible Functions (Auto-detect environment) ===
 
-/**
- * Flexible Next.js signup that works in both App Router and Pages Router
- * Automatically detects the context and uses the appropriate method
- */
-export async function signupNextFlexible(email: string, password: string, res?: any) {
-  try {
-    const result = await signupCore(email, password);
-    
-    // If res is provided, use Pages Router method
-    if (res && typeof res.setHeader === 'function') {
-      res.setHeader(
-        "Set-Cookie",
-        `${authConfig.cookieName}=${result.token}; HttpOnly; Path=/; Max-Age=${result.cookieOptions.maxAge}; SameSite=Lax${
-          result.cookieOptions.secure ? "; Secure" : ""
-        }`
-      );
-      return result.user;
-    }
-    
-    // Try App Router method (next/headers)
-    try {
-      // Use safe dynamic import instead of eval
-      const nextHeaders = getNextHeaders();
-      const cookieStore = nextHeaders.cookies();
-      cookieStore.set(authConfig.cookieName, result.token, result.cookieOptions);
-      return result.user;
-    } catch (importError) {
-      // If both methods fail, provide guidance
-      throw new Error(
-        'Unable to set authentication cookie. This function requires either:\n' +
-        '1. A Next.js API response object (Pages Router): signupNextFlexible(email, password, res)\n' +
-        '2. Next.js App Router context (Server Component/Action/Route Handler)\n\n' +
-        'Alternative: Use signupCore() and handle cookie setting manually:\n' +
-        'const result = await signupCore(email, password);\n' +
-        '// Then set result.token as a cookie manually'
-      );
-    }
-  } catch (error) {
-    throw new Error(`Signup failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Flexible Next.js signin that works in both App Router and Pages Router
- */
-export async function signinNextFlexible(email: string, password: string, res?: any) {
-  try {
-    const result = await signinCore(email, password);
-    
-    // If res is provided, use Pages Router method
-    if (res && typeof res.setHeader === 'function') {
-      res.setHeader(
-        "Set-Cookie",
-        `${authConfig.cookieName}=${result.token}; HttpOnly; Path=/; Max-Age=${result.cookieOptions.maxAge}; SameSite=Lax${
-          result.cookieOptions.secure ? "; Secure" : ""
-        }`
-      );
-      return result.user;
-    }
-    
-    // Try App Router method (next/headers)
-    try {
-      // Use safe dynamic import instead of eval
-      const nextHeaders = getNextHeaders();
-      const cookieStore = nextHeaders.cookies();
-      cookieStore.set(authConfig.cookieName, result.token, result.cookieOptions);
-      return result.user;
-    } catch (importError) {
-      // If both methods fail, provide guidance
-      throw new Error(
-        'Unable to set authentication cookie. This function requires either:\n' +
-        '1. A Next.js API response object (Pages Router): signinNextFlexible(email, password, res)\n' +
-        '2. Next.js App Router context (Server Component/Action/Route Handler)\n\n' +
-        'Alternative: Use signinCore() and handle cookie setting manually:\n' +
-        'const result = await signinCore(email, password);\n' +
-        '// Then set result.token as a cookie manually'
-      );
-    }
-  } catch (error) {
-    throw new Error(`Signin failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Flexible Next.js get current user that works in both App Router and Pages Router
- */
-export async function getCurrentUserNextFlexible(req?: any) {
-  try {
-    // If req is provided, use Pages Router method
-    if (req && req.cookies) {
-      const token = req.cookies[authConfig.cookieName] || null;
-      return getCurrentUserFromToken(token);
-    }
-    
-    // Try App Router method (next/headers)
-    try {
-      // Use safe dynamic import instead of eval
-      const nextHeaders = getNextHeaders();
-      const cookieStore = nextHeaders.cookies();
-      const token = cookieStore.get(authConfig.cookieName)?.value || null;
-      return getCurrentUserFromToken(token);
-    } catch (importError) {
-      // If both methods fail, provide guidance
-      throw new Error(
-        'Unable to read authentication cookie. This function requires either:\n' +
-        '1. A Next.js API request object (Pages Router): getCurrentUserNextFlexible(req)\n' +
-        '2. Next.js App Router context (Server Component/Action/Route Handler)\n\n' +
-        'Alternative: Extract the token manually and use getCurrentUserFromToken(token)'
-      );
-    }
-  } catch (error) {
-    throw new Error(`Get current user failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Create an authenticated NextResponse with user info
- */
-export function createAuthenticatedResponse(
-  response: any,
-  user: { id: string; email: string; createdAt?: Date }
+export async function signupNext(
+  email: string,
+  password: string,
+  res?: any
 ) {
-  // Add user info to response headers for downstream consumption
-  response.headers.set("x-user-id", user.id);
-  response.headers.set("x-user-email", user.email);
-  return response;
+  const result = await signupCore(email, password);
+  
+  // Try Pages Router if res provided
+  if (res?.setHeader) {
+    const cookie = CookieUtils.createCookieString(
+      CookieUtils.getCookieName(),
+      result.token,
+      result.cookieOptions
+    );
+    res.setHeader('Set-Cookie', cookie);
+    return result.user;
+  }
+  
+  // Try App Router
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (modules.cookies) {
+      const cookieStore = modules.cookies();
+      cookieStore.set(CookieUtils.getCookieName(), result.token, result.cookieOptions);
+      return result.user;
+    }
+  } catch {}
+  
+  // Fallback error
+  throw new Error(
+    'Unable to set authentication cookie. ' +
+    'Pass a response object for Pages Router or call from App Router context.'
+  );
 }
 
-/**
- * Helper function to create API validation endpoint for secure middleware
- * Use this in your API route to validate tokens server-side
- * 
- * Example usage in pages/api/auth/validate.ts or app/api/auth/validate/route.ts:
- * 
- * ```typescript
- * import { createTokenValidationHandler } from 'authrix/nextjs';
- * 
- * export const POST = createTokenValidationHandler();
- * ```
- */
+export async function signinNext(
+  email: string,
+  password: string,
+  res?: any
+) {
+  const result = await signinCore(email, password);
+  
+  // Try Pages Router if res provided
+  if (res?.setHeader) {
+    const cookie = CookieUtils.createCookieString(
+      CookieUtils.getCookieName(),
+      result.token,
+      result.cookieOptions
+    );
+    res.setHeader('Set-Cookie', cookie);
+    return result.user;
+  }
+  
+  // Try App Router
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (modules.cookies) {
+      const cookieStore = modules.cookies();
+      cookieStore.set(CookieUtils.getCookieName(), result.token, result.cookieOptions);
+      return result.user;
+    }
+  } catch {}
+  
+  // Fallback error
+  throw new Error(
+    'Unable to set authentication cookie. ' +
+    'Pass a response object for Pages Router or call from App Router context.'
+  );
+}
+
+export async function logoutNext(res?: any) {
+  const result = logoutCore();
+  
+  // Try Pages Router if res provided
+  if (res?.setHeader) {
+    const cookie = CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
+    res.setHeader('Set-Cookie', cookie);
+    return { message: result.message };
+  }
+  
+  // Try App Router
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (modules.cookies) {
+      const cookieStore = modules.cookies();
+      // Use the first cookie to clear (which should be the auth cookie)
+      const cookieToSet = result.cookiesToClear[0];
+      if (cookieToSet) {
+        cookieStore.set(cookieToSet.name, "", cookieToSet.options);
+      }
+      return { message: result.message };
+    }
+  } catch {}
+  
+  // Fallback error
+  throw new Error(
+    'Unable to clear authentication cookie. ' +
+    'Pass a response object for Pages Router or call from App Router context.'
+  );
+}
+
+export async function getCurrentUserNext(req?: any) {
+  // Try Pages Router if req provided
+  if (req?.cookies) {
+    const token = req.cookies[CookieUtils.getCookieName()] || null;
+    return getCurrentUserFromToken(token);
+  }
+  
+  // Try App Router
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (modules.cookies) {
+      const cookieStore = modules.cookies();
+      const token = cookieStore.get(CookieUtils.getCookieName())?.value || null;
+      return getCurrentUserFromToken(token);
+    }
+  } catch {}
+  
+  return null;
+}
+
+export async function isAuthenticatedNext(req?: any): Promise<boolean> {
+  // Try Pages Router if req provided
+  if (req?.cookies) {
+    const token = req.cookies[CookieUtils.getCookieName()] || null;
+    return isTokenValid(token);
+  }
+  
+  // Try App Router
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (modules.cookies) {
+      const cookieStore = modules.cookies();
+      const token = cookieStore.get(CookieUtils.getCookieName())?.value || null;
+      return isTokenValid(token);
+    }
+  } catch {}
+  
+  return false;
+}
+
+// === Flexible Functions with explicit naming ===
+
+export async function signupNextFlexible(
+  email: string,
+  password: string,
+  res?: any
+) {
+  return signupNext(email, password, res);
+}
+
+export async function signinNextFlexible(
+  email: string,
+  password: string,
+  res?: any
+) {
+  return signinNext(email, password, res);
+}
+
+export async function getCurrentUserNextFlexible(req?: any) {
+  return getCurrentUserNext(req);
+}
+
+// === API Route Handlers ===
+
+export function createSignupHandler() {
+  return async function handler(request: Request) {
+    if (request.method !== 'POST') {
+      return Response.json(
+        { error: 'Method not allowed' },
+        { status: 405 }
+      );
+    }
+
+    try {
+      const { email, password } = await request.json();
+
+      if (!email || !password) {
+        return Response.json(
+          { error: 'Email and password are required' },
+          { status: 400 }
+        );
+      }
+
+      const result = await signupCore(email, password);
+      
+      const response = Response.json({
+        success: true,
+        user: result.user,
+        message: 'Account created successfully'
+      });
+
+      // Set cookie
+      const cookie = CookieUtils.createCookieString(
+        CookieUtils.getCookieName(),
+        result.token,
+        result.cookieOptions
+      );
+      response.headers.set('Set-Cookie', cookie);
+
+      return response;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Signup failed';
+      const status = message.includes('already registered') ? 409 : 400;
+      
+      return Response.json(
+        { error: message },
+        { status }
+      );
+    }
+  };
+}
+
+export function createSigninHandler() {
+  return async function handler(request: Request) {
+    if (request.method !== 'POST') {
+      return Response.json(
+        { error: 'Method not allowed' },
+        { status: 405 }
+      );
+    }
+
+    try {
+      const { email, password } = await request.json();
+
+      if (!email || !password) {
+        return Response.json(
+          { error: 'Email and password are required' },
+          { status: 400 }
+        );
+      }
+
+      const result = await signinCore(email, password);
+      
+      const response = Response.json({
+        success: true,
+        user: result.user,
+        message: 'Signed in successfully'
+      });
+
+      // Set cookie
+      const cookie = CookieUtils.createCookieString(
+        CookieUtils.getCookieName(),
+        result.token,
+        result.cookieOptions
+      );
+      response.headers.set('Set-Cookie', cookie);
+
+      return response;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Signin failed';
+      
+      return Response.json(
+        { error: message },
+        { status: 401 }
+      );
+    }
+  };
+}
+
+export function createLogoutHandler() {
+  return async function handler(request: Request) {
+    if (request.method !== 'POST') {
+      return Response.json(
+        { error: 'Method not allowed' },
+        { status: 405 }
+      );
+    }
+
+    try {
+      const result = logoutCore();
+      
+      const response = Response.json({
+        success: true,
+        message: result.message
+      });
+
+      // Clear cookie
+      const cookie = CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
+      response.headers.set('Set-Cookie', cookie);
+
+      return response;
+    } catch (error) {
+      return Response.json(
+        { error: 'Logout failed' },
+        { status: 500 }
+      );
+    }
+  };
+}
+
+export function createCurrentUserHandler() {
+  return async function handler(request: Request) {
+    if (request.method !== 'GET') {
+      return Response.json(
+        { error: 'Method not allowed' },
+        { status: 405 }
+      );
+    }
+
+    try {
+      const cookieHeader = request.headers.get('cookie');
+      const cookies = parseCookies(cookieHeader || '');
+      const token = cookies[CookieUtils.getCookieName()];
+      
+      const user = await getCurrentUserFromToken(token);
+      
+      if (!user) {
+        return Response.json(
+          { error: 'Not authenticated' },
+          { status: 401 }
+        );
+      }
+
+      return Response.json({
+        success: true,
+        user
+      });
+    } catch (error) {
+      return Response.json(
+        { error: 'Failed to get current user' },
+        { status: 500 }
+      );
+    }
+  };
+}
+
 export function createTokenValidationHandler() {
   return async function handler(request: Request) {
     try {
       const authHeader = request.headers.get('Authorization');
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      if (!authHeader?.startsWith('Bearer ')) {
         return Response.json(
           { success: false, error: 'Authorization header required' },
           { status: 401 }
@@ -887,14 +866,7 @@ export function createTokenValidationHandler() {
         );
       }
       
-      return Response.json({
-        success: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          createdAt: user.createdAt
-        }
-      });
+      return Response.json({ success: true, user });
     } catch (error) {
       return Response.json(
         { success: false, error: 'Token validation failed' },
@@ -904,17 +876,127 @@ export function createTokenValidationHandler() {
   };
 }
 
-/**
- * Pages Router version of token validation handler
- * 
- * Example usage in pages/api/auth/validate.ts:
- * 
- * ```typescript
- * import { createTokenValidationHandlerPages } from 'authrix/nextjs';
- * 
- * export default createTokenValidationHandlerPages();
- * ```
- */
+// === Pages Router Handlers ===
+
+export function createSignupHandlerPages() {
+  return async function handler(req: any, res: any) {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    try {
+      const { email, password } = req.body;
+
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required' });
+      }
+
+      const result = await signupCore(email, password);
+      
+      // Set cookie
+      const cookie = CookieUtils.createCookieString(
+        CookieUtils.getCookieName(),
+        result.token,
+        result.cookieOptions
+      );
+      res.setHeader('Set-Cookie', cookie);
+
+      return res.json({
+        success: true,
+        user: result.user,
+        message: 'Account created successfully'
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Signup failed';
+      const status = message.includes('already registered') ? 409 : 400;
+      
+      return res.status(status).json({ error: message });
+    }
+  };
+}
+
+export function createSigninHandlerPages() {
+  return async function handler(req: any, res: any) {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    try {
+      const { email, password } = req.body;
+
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required' });
+      }
+
+      const result = await signinCore(email, password);
+      
+      // Set cookie
+      const cookie = CookieUtils.createCookieString(
+        CookieUtils.getCookieName(),
+        result.token,
+        result.cookieOptions
+      );
+      res.setHeader('Set-Cookie', cookie);
+
+      return res.json({
+        success: true,
+        user: result.user,
+        message: 'Signed in successfully'
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Signin failed';
+      return res.status(401).json({ error: message });
+    }
+  };
+}
+
+export function createLogoutHandlerPages() {
+  return async function handler(req: any, res: any) {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    try {
+      const result = logoutCore();
+      
+      // Clear cookie
+      const cookie = CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
+      res.setHeader('Set-Cookie', cookie);
+
+      return res.json({
+        success: true,
+        message: result.message
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Logout failed' });
+    }
+  };
+}
+
+export function createCurrentUserHandlerPages() {
+  return async function handler(req: any, res: any) {
+    if (req.method !== 'GET') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    try {
+      const token = req.cookies[CookieUtils.getCookieName()];
+      const user = await getCurrentUserFromToken(token);
+      
+      if (!user) {
+        return res.status(401).json({ error: 'Not authenticated' });
+      }
+
+      return res.json({
+        success: true,
+        user
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Failed to get current user' });
+    }
+  };
+}
+
 export function createTokenValidationHandlerPages() {
   return async function handler(req: any, res: any) {
     if (req.method !== 'POST') {
@@ -923,7 +1005,7 @@ export function createTokenValidationHandlerPages() {
     
     try {
       const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      if (!authHeader?.startsWith('Bearer ')) {
         return res.status(401).json({
           success: false,
           error: 'Authorization header required'
@@ -940,14 +1022,7 @@ export function createTokenValidationHandlerPages() {
         });
       }
       
-      return res.json({
-        success: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          createdAt: user.createdAt
-        }
-      });
+      return res.json({ success: true, user });
     } catch (error) {
       return res.status(500).json({
         success: false,
@@ -957,192 +1032,100 @@ export function createTokenValidationHandlerPages() {
   };
 }
 
-/**
- * Manually re-run Next.js environment detection
- * Useful when the environment might have changed or for debugging detection issues
- */
-export function redetectNextJsEnvironment() {
-  detectionComplete = false;
-  isNextJsAvailable = false;
-  nextJsContext = 'unknown';
-  NextRequest = NextResponse = NextApiRequest = NextApiResponse = cookies = undefined;
+// === Helper Functions ===
+
+function parseCookies(cookieHeader: string): Record<string, string> {
+  const cookies: Record<string, string> = {};
   
-  detectNextJsEnvironment();
+  if (!cookieHeader) return cookies;
   
-  return getNextJsEnvironmentInfo();
+  cookieHeader.split(';').forEach(cookie => {
+    const [name, ...rest] = cookie.trim().split('=');
+    if (name && rest.length > 0) {
+      cookies[name] = rest.join('=');
+    }
+  });
+  
+  return cookies;
 }
 
-/**
- * Force Next.js availability (use with caution)
- * This can be used to override detection in environments where automatic detection fails
- */
-export function forceNextJsAvailability(
-  available: boolean, 
-  context?: 'app-router' | 'pages-router' | 'middleware' | 'unknown'
-) {
-  isNextJsAvailable = available;
-  if (context) {
-    nextJsContext = context;
-  }
-  detectionComplete = true;
-  
-  console.warn(
-    `Next.js availability manually set to: ${available}${context ? `, context: ${context}` : ''}\n` +
-    'This should only be used for debugging or in environments where automatic detection fails.'
+// === Environment Info ===
+
+export function getNextJsEnvironmentInfo(): EnvironmentInfo {
+  // Ensure modules are loaded before returning info
+  ModuleLoader.loadModules();
+  return ModuleLoader.getEnvironmentInfo();
+}
+
+export function redetectNextJsEnvironment(): EnvironmentInfo {
+  return ModuleLoader.reset();
+}
+
+export function resetEnvironmentDetection(): void {
+  ModuleLoader.reset();
+}
+
+export function forceNextJsAvailability(available: boolean = true): void {
+  // For testing purposes - force Next.js availability
+  const info = ModuleLoader.getEnvironmentInfo();
+  info.isNextJsAvailable = available;
+}
+
+// === Cookie Helpers ===
+
+export function createAuthCookieString(
+  token: string,
+  options?: Partial<Parameters<typeof CookieUtils.createCookieString>[2]>
+): string {
+  return CookieUtils.createCookieString(
+    CookieUtils.getCookieName(),
+    token,
+    {
+      httpOnly: true,
+      path: '/',
+      maxAge: 604800, // 7 days
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      ...options
+    }
   );
 }
 
-// === SIMPLIFIED PRODUCTION-READY FUNCTIONS ===
-// These functions provide direct access to the core functionality
-// without complex environment detection for better production reliability
+export function createLogoutCookieString(): string {
+  return CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
+}
 
-/**
- * Simple Next.js signup for App Router - uses dynamic import
- * Call this from Server Components, Server Actions, or Route Handlers
- */
-export async function signupNext(email: string, password: string) {
-  const result = await signupCore(email, password);
-  
-  try {
-    // Use require for better compatibility
-    const nextHeaders = require("next/headers");
-    const cookieStore = nextHeaders.cookies();
-    cookieStore.set(authConfig.cookieName, result.token, result.cookieOptions);
-    return result.user;
-  } catch (error) {
-    throw new Error(
-      `Failed to set authentication cookie. Make sure you're calling this from a Next.js App Router context ` +
-      `(Server Component, Server Action, or Route Handler). ` +
-      `For Pages Router, use signupNextPages(email, password, res) instead. ` +
-      `For manual cookie handling, use signupCore(email, password) and handle the cookie yourself.`
+// === Response Creation Helpers ===
+
+export function createAuthenticatedResponse(
+  data: any,
+  token?: string,
+  options?: {
+    status?: number;
+    headers?: Record<string, string>;
+    cookieOptions?: any;
+  }
+) {
+  const response = Response.json(data, {
+    status: options?.status || 200,
+    headers: options?.headers
+  });
+
+  if (token) {
+    const cookie = CookieUtils.createCookieString(
+      CookieUtils.getCookieName(),
+      token,
+      {
+        httpOnly: true,
+        path: '/',
+        maxAge: 604800, // 7 days
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        ...options?.cookieOptions
+      }
     );
+    response.headers.set('Set-Cookie', cookie);
   }
-}
 
-/**
- * Simple Next.js signin for App Router - uses dynamic import
- * Call this from Server Components, Server Actions, or Route Handlers
- */
-export async function signinNext(email: string, password: string) {
-  const result = await signinCore(email, password);
-  
-  try {
-    // Use require for better compatibility
-    const nextHeaders = require("next/headers");
-    const cookieStore = nextHeaders.cookies();
-    cookieStore.set(authConfig.cookieName, result.token, result.cookieOptions);
-    return result.user;
-  } catch (error) {
-    throw new Error(
-      `Failed to set authentication cookie. Make sure you're calling this from a Next.js App Router context ` +
-      `(Server Component, Server Action, or Route Handler). ` +
-      `For Pages Router, use signinNextPages(email, password, res) instead. ` +
-      `For manual cookie handling, use signinCore(email, password) and handle the cookie yourself.`
-    );
-  }
-}
-
-/**
- * Simple Next.js logout for App Router - uses dynamic import
- * Call this from Server Components, Server Actions, or Route Handlers
- */
-export function logoutNext() {
-  const result = logoutCore();
-  
-  try {
-    // Dynamic import to avoid build-time errors
-    const { cookies } = require("next/headers");
-    const cookieStore = cookies();
-    cookieStore.set(authConfig.cookieName, "", result.cookieOptions);
-    return { message: result.message };
-  } catch (error) {
-    throw new Error(
-      `Failed to clear authentication cookie. Make sure you're calling this from a Next.js App Router context ` +
-      `(Server Component, Server Action, or Route Handler). ` +
-      `For Pages Router, use logoutNextPages(res) instead. ` +
-      `For manual cookie handling, use logoutCore() and handle the cookie yourself.`
-    );
-  }
-}
-
-/**
- * Simple Next.js get current user for App Router - uses dynamic import
- * Call this from Server Components, Server Actions, or Route Handlers
- */
-export async function getCurrentUserNext() {
-  try {
-    // Dynamic import to avoid build-time errors
-    const { cookies } = require("next/headers");
-    const cookieStore = cookies();
-    const token = cookieStore.get(authConfig.cookieName)?.value || null;
-    return getCurrentUserFromToken(token);
-  } catch (error) {
-    throw new Error(
-      `Failed to read authentication cookie. Make sure you're calling this from a Next.js App Router context ` +
-      `(Server Component, Server Action, or Route Handler). ` +
-      `For Pages Router, use getCurrentUserNextPages(req) instead. ` +
-      `For manual token handling, extract the token yourself and use getCurrentUserFromToken(token).`
-    );
-  }
-}
-
-/**
- * Production-ready authentication check that always works
- * Returns false instead of throwing errors for better UX
- */
-export async function isAuthenticatedNext(): Promise<boolean> {
-  try {
-    // Try Next.js App Router first
-    const { cookies } = require("next/headers");
-    const cookieStore = cookies();
-    const token = cookieStore.get(authConfig.cookieName)?.value || null;
-    return isTokenValid(token);
-  } catch (error) {
-    // Silently return false if Next.js headers aren't available
-    return false;
-  }
-}
-
-// === MANUAL COOKIE HELPERS ===
-// For when you want full control over cookie handling
-
-/**
- * Helper to create cookie string for manual setting
- * Use this when you want to handle cookie setting manually
- */
-export function createAuthCookieString(token: string, options?: { 
-  secure?: boolean; 
-  maxAge?: number; 
-  sameSite?: string; 
-  path?: string; 
-}) {
-  const cookieOptions = {
-    secure: options?.secure ?? (process.env.NODE_ENV === "production"),
-    maxAge: options?.maxAge ?? (1000 * 60 * 60 * 24 * 7), // 7 days
-    sameSite: options?.sameSite ?? "lax",
-    path: options?.path ?? "/",
-  };
-  
-  return `${authConfig.cookieName}=${token}; HttpOnly; Path=${cookieOptions.path}; Max-Age=${cookieOptions.maxAge}; SameSite=${cookieOptions.sameSite}${
-    cookieOptions.secure ? "; Secure" : ""
-  }`;
-}
-
-/**
- * Helper to create logout cookie string for manual clearing
- */
-export function createLogoutCookieString(options?: { 
-  secure?: boolean; 
-  sameSite?: string; 
-  path?: string; 
-}) {
-  const cookieOptions = {
-    secure: options?.secure ?? (process.env.NODE_ENV === "production"),
-    sameSite: options?.sameSite ?? "lax",
-    path: options?.path ?? "/",
-  };
-  
-  return `${authConfig.cookieName}=; HttpOnly; Path=${cookieOptions.path}; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=${cookieOptions.sameSite}${
-    cookieOptions.secure ? "; Secure" : ""
-  }`;
+  return response;
 }

@@ -58,7 +58,7 @@ describe('Core Authentication', () => {
   describe('signupCore', () => {
     it('should create a new user successfully', async () => {
       const email = 'test@example.com';
-      const password = 'password123';
+  const password = 'P@ssw0rdZ9!';
       
       const result = await signupCore(email, password);
       
@@ -75,7 +75,7 @@ describe('Core Authentication', () => {
 
     it('should reject signup with existing email', async () => {
       const email = 'existing@example.com';
-      const password = 'password123';
+  const password = 'P@ssw0rdZ9!';
       
       // Mock existing user
       mockAdapter.findUserByEmail.mockResolvedValue({
@@ -85,14 +85,14 @@ describe('Core Authentication', () => {
         createdAt: new Date()
       });
       
-      await expect(signupCore(email, password)).rejects.toThrow('Email already registered');
+  await expect(signupCore(email, password)).rejects.toThrow('An account with this email already exists');
       expect(mockAdapter.findUserByEmail).toHaveBeenCalledWith(email);
       expect(mockAdapter.createUser).not.toHaveBeenCalled();
     });
 
     it('should validate email format', async () => {
       const invalidEmail = 'invalid-email';
-      const password = 'password123';
+  const password = 'P@ssw0rdZ9!';
       
       await expect(signupCore(invalidEmail, password)).rejects.toThrow();
     });
@@ -106,7 +106,7 @@ describe('Core Authentication', () => {
 
     it('should handle empty email', async () => {
       const email = '';
-      const password = 'password123';
+  const password = 'P@ssw0rdZ9!';
       
       await expect(signupCore(email, password)).rejects.toThrow();
     });
@@ -133,7 +133,7 @@ describe('Core Authentication', () => {
 
     it('should sign in with correct credentials', async () => {
       const email = 'test@example.com';
-      const password = 'password123';
+  const password = 'P@ssw0rdZ9!';
       
       // Mock password verification
       (mockBcrypt.compare as jest.MockedFunction<any>).mockResolvedValueOnce(true);
@@ -191,23 +191,26 @@ describe('Core Authentication', () => {
       
       expect(result).toBeDefined();
       expect(result.message).toBe('Logged out successfully');
-      expect(result.cookieOptions).toBeDefined();
-      expect(result.cookieOptions.expires).toEqual(new Date(0)); // Cookie should be expired
+  expect(Array.isArray(result.cookiesToClear)).toBe(true);
+  expect(result.cookiesToClear.length).toBeGreaterThan(0);
+  expect(result.cookiesToClear[0].options.expires).toEqual(new Date(0)); // Cookie should be expired
     });
 
     it('should set cookie expiration to past date', () => {
       const result = logoutCore();
       
-      expect(result.cookieOptions.expires).toBeInstanceOf(Date);
-      expect(result.cookieOptions.expires.getTime()).toBeLessThan(Date.now());
+  const exp = result.cookiesToClear[0].options.expires;
+  expect(exp).toBeInstanceOf(Date);
+  expect(exp.getTime()).toBeLessThan(Date.now());
     });
 
     it('should maintain security settings in cookie options', () => {
       const result = logoutCore();
       
-      expect(result.cookieOptions.httpOnly).toBe(true);
-      expect(result.cookieOptions.secure).toBeDefined();
-      expect(result.cookieOptions.sameSite).toBeDefined();
+  const opts = result.cookiesToClear[0].options;
+  expect(opts.httpOnly).toBe(true);
+  expect(opts.secure).toBeDefined();
+  expect(opts.sameSite).toBeDefined();
     });
   });
 

@@ -1,6 +1,8 @@
-import { randomBytes, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import { authConfig } from "../config";
-import { hashPassword } from "../utils/hash";
+import { hashPassword, verifyPassword, validatePassword, generateSecurePassword } from "../utils/hash";
+import { BadRequestError, UnauthorizedError, InternalServerError } from "../utils/errors";
+import { generateTwoFactorCode, verifyTwoFactorCode } from "./twoFactor";
 
 export interface ForgotPasswordOptions {
   codeLength?: number;
@@ -8,6 +10,7 @@ export interface ForgotPasswordOptions {
   maxAttempts?: number;
   rateLimitDelay?: number; // in seconds
   requireExistingUser?: boolean;
+  useEmailService?: boolean; // Use 2FA email service instead of console logging
   customEmailTemplate?: (email: string, code: string, username?: string) => {
     subject: string;
     text: string;
@@ -19,13 +22,16 @@ export interface ResetPasswordOptions {
   minPasswordLength?: number;
   requireStrongPassword?: boolean;
   invalidateAllSessions?: boolean;
-  preventReuse?: boolean; // Prevent reusing current password
+  preventReuse?: boolean;
+  skipPasswordValidation?: boolean; // For backward compatibility
 }
 
 export interface ForgotPasswordResult {
   success: boolean;
   message: string;
+  codeId?: string;
   codeExpiration?: Date;
+  attemptsRemaining?: number;
 }
 
 export interface ResetPasswordResult {
@@ -36,232 +42,213 @@ export interface ResetPasswordResult {
     email: string;
     username?: string;
   };
+  mustChangePassword?: boolean;
 }
 
-// Simple in-memory storage for password reset codes
-// In production, use Redis or database storage
-interface PasswordResetCode {
-  code: string;
-  hashedCode: string;
-  email: string;
-  expiresAt: Date;
-  attempts: number;
-  createdAt: Date;
-  isUsed: boolean;
-}
-
-const passwordResetCodes = new Map<string, PasswordResetCode>();
-const rateLimitStore = new Map<string, number>();
+// Rate limiting for password reset requests
+const rateLimitStore = new Map<string, {
+  count: number;
+  lastAttempt: number;
+  blockedUntil?: number;
+}>();
 
 /**
- * Hash a verification code
+ * Enhanced rate limiting with progressive blocking
  */
-async function hashVerificationCode(code: string): Promise<string> {
-  try {
-    const { createHash } = await import('crypto');
-    return createHash('sha256').update(code + process.env.JWT_SECRET || 'default_secret').digest('hex');
-  } catch {
-    // Fallback if crypto is not available
-    return Buffer.from(code).toString('base64');
+function checkPasswordResetRateLimit(email: string, rateLimitDelay: number = 60): {
+  allowed: boolean;
+  attemptsRemaining: number;
+  blockedUntil?: Date;
+  nextAttemptIn?: number;
+} {
+  const now = Date.now();
+  const rateLimitKey = `forgot_password_${email}`;
+  const maxAttemptsPerHour = 3;
+  const windowMs = 60 * 60 * 1000; // 1 hour
+
+  const attempts = rateLimitStore.get(rateLimitKey);
+
+  if (!attempts) {
+    rateLimitStore.set(rateLimitKey, { count: 1, lastAttempt: now });
+    return { allowed: true, attemptsRemaining: maxAttemptsPerHour - 1 };
   }
-}
 
-/**
- * Verify a hashed code
- */
-async function verifyCodeHash(code: string, hash: string): Promise<boolean> {
-  const hashedInput = await hashVerificationCode(code);
-  return hashedInput === hash;
-}
-
-/**
- * Generate a verification code
- */
-function generateVerificationCode(length: number = 6): string {
-  const digits = '0123456789';
-  let code = '';
-  for (let i = 0; i < length; i++) {
-    code += digits[Math.floor(Math.random() * digits.length)];
+  // Check if currently blocked
+  if (attempts.blockedUntil && now < attempts.blockedUntil) {
+    return {
+      allowed: false,
+      attemptsRemaining: 0,
+      blockedUntil: new Date(attempts.blockedUntil),
+      nextAttemptIn: Math.ceil((attempts.blockedUntil - now) / 1000)
+    };
   }
-  return code;
-}
 
-/**
- * Clean expired codes
- */
-function cleanExpiredCodes(): void {
-  const now = new Date();
-  for (const [key, code] of Array.from(passwordResetCodes.entries())) {
-    if (now > code.expiresAt) {
-      passwordResetCodes.delete(key);
-    }
+  // Reset if window has passed
+  if (now - attempts.lastAttempt > windowMs) {
+    rateLimitStore.set(rateLimitKey, { count: 1, lastAttempt: now });
+    return { allowed: true, attemptsRemaining: maxAttemptsPerHour - 1 };
   }
-}
 
-export interface ForgotPasswordOptions {
-  codeLength?: number;
-  codeExpiration?: number; // in minutes
-  maxAttempts?: number;
-  rateLimitDelay?: number; // in seconds
-  requireExistingUser?: boolean;
-  customEmailTemplate?: (email: string, code: string, username?: string) => {
-    subject: string;
-    text: string;
-    html?: string;
-  };
-}
+  // Check basic rate limit (time between requests)
+  if (now - attempts.lastAttempt < rateLimitDelay * 1000) {
+    return {
+      allowed: false,
+      attemptsRemaining: maxAttemptsPerHour - attempts.count,
+      nextAttemptIn: Math.ceil((rateLimitDelay * 1000 - (now - attempts.lastAttempt)) / 1000)
+    };
+  }
 
-export interface ResetPasswordOptions {
-  minPasswordLength?: number;
-  requireStrongPassword?: boolean;
-  invalidateAllSessions?: boolean;
-  preventReuse?: boolean; // Prevent reusing current password
-}
+  // Increment attempts
+  attempts.count++;
+  attempts.lastAttempt = now;
 
-export interface ForgotPasswordResult {
-  success: boolean;
-  message: string;
-  codeExpiration?: Date;
-}
+  // Check if should be blocked
+  if (attempts.count >= maxAttemptsPerHour) {
+    const blockDuration = 60 * 60 * 1000; // 1 hour block
+    attempts.blockedUntil = now + blockDuration;
+    return {
+      allowed: false,
+      attemptsRemaining: 0,
+      blockedUntil: new Date(attempts.blockedUntil)
+    };
+  }
 
-export interface ResetPasswordResult {
-  success: boolean;
-  message: string;
-  user?: {
-    id: string;
-    email: string;
-    username?: string;
+  return {
+    allowed: true,
+    attemptsRemaining: maxAttemptsPerHour - attempts.count
   };
 }
 
 /**
- * Initiate forgot password process
+ * Clear rate limit for successful password reset
+ */
+function clearPasswordResetRateLimit(email: string): void {
+  rateLimitStore.delete(`forgot_password_${email}`);
+}
+
+/**
+ * Enhanced forgot password initiation with 2FA integration
  */
 export async function initiateForgotPassword(
   email: string,
   options: ForgotPasswordOptions = {}
 ): Promise<ForgotPasswordResult> {
   const db = authConfig.db;
-  
+
   if (!db) {
-    throw new Error("Database not configured. Make sure initAuth() is called before using forgot password functions.");
+    throw new InternalServerError("Database not configured. Make sure initAuth() is called before using forgot password functions.");
   }
 
   const {
     codeLength = 6,
     codeExpiration = 15, // 15 minutes
-    maxAttempts = 5,
+    maxAttempts = 3,
     rateLimitDelay = 60, // 60 seconds
     requireExistingUser = true,
+    useEmailService = true,
     customEmailTemplate
   } = options;
+
+  // Input validation
+  if (!email?.trim()) {
+    throw new BadRequestError("Email is required");
+  }
 
   const normalizedEmail = email.toLowerCase().trim();
 
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(normalizedEmail)) {
-    throw new Error("Invalid email format");
-  }
-
-  // Check if user exists
-  const user = await db.findUserByEmail(normalizedEmail);
-  
-  if (!user && requireExistingUser) {
-    // For security, don't reveal if user exists or not
-    return {
-      success: true,
-      message: "If an account with this email exists, a password reset code has been sent."
-    };
-  }
-
-  if (!user && !requireExistingUser) {
-    throw new Error("No account found with this email address.");
+    throw new BadRequestError("Invalid email format");
   }
 
   // Check rate limiting
-  const currentTime = new Date();
-  const rateLimitKey = `forgot_password_rate_limit_${normalizedEmail}`;
-  
-  const lastAttempt = rateLimitStore.get(rateLimitKey);
-  if (lastAttempt && (currentTime.getTime() - lastAttempt) < (rateLimitDelay * 1000)) {
-    throw new Error(`Please wait ${rateLimitDelay} seconds before requesting another password reset code.`);
+  const rateLimitCheck = checkPasswordResetRateLimit(normalizedEmail, rateLimitDelay);
+  if (!rateLimitCheck.allowed) {
+    const message = rateLimitCheck.blockedUntil
+      ? `Too many password reset attempts. Try again after ${rateLimitCheck.blockedUntil.toLocaleTimeString()}`
+      : `Please wait ${rateLimitCheck.nextAttemptIn} seconds before requesting another password reset code.`;
+    throw new BadRequestError(message);
   }
 
   try {
-    // Clean expired codes first
-    cleanExpiredCodes();
+    // Check if user exists
+    const user = await db.findUserByEmail(normalizedEmail);
 
-    // Generate verification code
-    const code = generateVerificationCode(codeLength);
-    const hashedCode = await hashVerificationCode(code);
-    const expiresAt = new Date(Date.now() + codeExpiration * 60 * 1000);
-    const codeId = randomUUID();
-
-    // Store the reset code
-    passwordResetCodes.set(codeId, {
-      code: '', // Don't store plaintext
-      hashedCode,
-      email: normalizedEmail,
-      expiresAt,
-      attempts: 0,
-      createdAt: new Date(),
-      isUsed: false
-    });
-
-    // Prepare email content
-    let emailSubject = "Password Reset Code";
-    let emailText = `Your password reset code is: ${code}. This code expires in ${codeExpiration} minutes.`;
-    let emailHtml: string | undefined;
-
-    if (customEmailTemplate) {
-      const template = customEmailTemplate(normalizedEmail, code, user?.username);
-      emailSubject = template.subject;
-      emailText = template.text;
-      emailHtml = template.html;
-    } else {
-      emailHtml = `
-        <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
-          <h2 style="color: #333; text-align: center;">Password Reset</h2>
-          <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <p>Hello${user?.username ? ` ${user.username}` : ''},</p>
-            <p>We received a request to reset your password. Use the code below to reset your password:</p>
-            <div style="text-align: center; margin: 20px 0;">
-              <span style="background: #007bff; color: white; padding: 12px 24px; border-radius: 4px; font-size: 18px; font-weight: bold; letter-spacing: 2px; display: inline-block;">${code}</span>
-            </div>
-            <p><strong>This code expires in ${codeExpiration} minutes.</strong></p>
-            <p>If you didn't request this password reset, please ignore this email.</p>
-          </div>
-          <p style="color: #666; font-size: 12px; text-align: center;">
-            This is an automated message, please do not reply.
-          </p>
-        </div>
-      `;
+    if (!user && requireExistingUser) {
+      // For security, don't reveal if user exists or not
+      return {
+        success: true,
+        message: "If an account with this email exists, a password reset code has been sent."
+      };
     }
 
-    // For now, just log the code (in production, implement email service)
-    console.log(`[AUTHRIX] Password reset code for ${normalizedEmail}: ${code}`);
+    if (!user && !requireExistingUser) {
+      throw new BadRequestError("No account found with this email address.");
+    }
 
-    // Update rate limiting
-    rateLimitStore.set(rateLimitKey, currentTime.getTime());
+    // Use 2FA system for code generation and sending
+    if (useEmailService) {
+      try {
+        const { initiateEmailVerification } = await import('./twoFactor');
+
+        const result = await initiateEmailVerification(user!.id, normalizedEmail, {
+          codeLength,
+          expiryMinutes: codeExpiration,
+          subject: "Password Reset Code",
+          metadata: {
+            purpose: 'password_reset',
+            username: user?.username
+          }
+        });
+
+        return {
+          success: true,
+          message: "Password reset code sent to your email address.",
+          codeId: result.codeId,
+          codeExpiration: result.expiresAt,
+          attemptsRemaining: result.attemptsRemaining
+        };
+
+      } catch (error) {
+        console.error('[AUTHRIX] Failed to send password reset email:', error);
+        // Fallback to console logging
+        console.log(`[AUTHRIX] Email service failed, check configuration`);
+      }
+    }
+
+    // Fallback: Generate code using 2FA system but log to console
+    const { code, codeId, expiresAt } = await generateTwoFactorCode(user!.id, {
+      type: 'password_reset',
+      codeLength,
+      expiryMinutes: codeExpiration,
+      metadata: { email: normalizedEmail, purpose: 'password_reset' }
+    });
+
+    // Log code to console (development/fallback)
+    console.log(`[AUTHRIX] Password reset code for ${normalizedEmail}: ${code}`);
+    console.log(`[AUTHRIX] Code expires at: ${expiresAt.toLocaleString()}`);
 
     return {
       success: true,
       message: "Password reset code sent to your email address.",
+      codeId,
       codeExpiration: expiresAt
     };
 
   } catch (error) {
-    if (error instanceof Error && error.message.includes('rate limit')) {
+    console.error('[AUTHRIX] Forgot password error:', error);
+
+    if (error instanceof BadRequestError) {
       throw error;
     }
-    
-    throw new Error(`Failed to send password reset code: ${error instanceof Error ? error.message : 'Unknown error'}`);
+
+    throw new InternalServerError(`Failed to send password reset code: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 /**
- * Verify forgot password code and reset password
+ * Enhanced password reset with improved validation and security
  */
 export async function resetPasswordWithCode(
   email: string,
@@ -270,133 +257,124 @@ export async function resetPasswordWithCode(
   options: ResetPasswordOptions = {}
 ): Promise<ResetPasswordResult> {
   const db = authConfig.db;
-  
+
   if (!db) {
-    throw new Error("Database not configured. Make sure initAuth() is called before using forgot password functions.");
+    throw new InternalServerError("Database not configured. Make sure initAuth() is called before using forgot password functions.");
   }
 
   const {
     minPasswordLength = 8,
     requireStrongPassword = true,
     invalidateAllSessions = true,
-    preventReuse = true
+    preventReuse = true,
+    skipPasswordValidation = false
   } = options;
+
+  // Input validation
+  if (!email?.trim()) {
+    throw new BadRequestError("Email is required");
+  }
+
+  if (!code?.trim()) {
+    throw new BadRequestError("Reset code is required");
+  }
+
+  if (!newPassword?.trim()) {
+    throw new BadRequestError("New password is required");
+  }
 
   const normalizedEmail = email.toLowerCase().trim();
 
-  // Validate inputs
-  if (!code || code.trim().length === 0) {
-    throw new Error("Reset code is required");
-  }
-
-  if (!newPassword || newPassword.length < minPasswordLength) {
-    throw new Error(`Password must be at least ${minPasswordLength} characters long`);
-  }
-
-  // Strong password validation
-  if (requireStrongPassword) {
-    const hasUpperCase = /[A-Z]/.test(newPassword);
-    const hasLowerCase = /[a-z]/.test(newPassword);
-    const hasNumbers = /\d/.test(newPassword);
-    const hasNonAlphas = /\W/.test(newPassword);
-
-    if (!hasUpperCase || !hasLowerCase || !hasNumbers || !hasNonAlphas) {
-      throw new Error("Password must contain at least one uppercase letter, lowercase letter, number, and special character");
+  // Password validation
+  if (!skipPasswordValidation) {
+    if (requireStrongPassword) {
+      const validation = validatePassword(newPassword);
+      if (!validation.isValid) {
+        throw new BadRequestError(`Password validation failed: ${validation.errors.join(', ')}`);
+      }
+    } else if (newPassword.length < minPasswordLength) {
+      throw new BadRequestError(`Password must be at least ${minPasswordLength} characters long`);
     }
   }
 
-  // Find user
-  const user = await db.findUserByEmail(normalizedEmail);
-  if (!user) {
-    throw new Error("Invalid reset code or email address");
-  }
-
-  // Verify the reset code
   try {
-    cleanExpiredCodes();
-    
-    let foundCode: PasswordResetCode | null = null;
-    let codeId: string | null = null;
-    
-    // Find the code by email and verify it
-    for (const [id, resetCode] of Array.from(passwordResetCodes.entries())) {
-      if (resetCode.email === normalizedEmail && !resetCode.isUsed) {
-        const isValidCode = await verifyCodeHash(code, resetCode.hashedCode);
-        if (isValidCode) {
-          foundCode = resetCode;
-          codeId = id;
+    // Find user
+    const user = await db.findUserByEmail(normalizedEmail);
+    if (!user) {
+      throw new UnauthorizedError("Invalid reset code or email address");
+    }
+
+    // Get user's active password reset codes
+    const { getUserTwoFactorCodes } = await import('./twoFactor');
+    const userCodes = await getUserTwoFactorCodes(user.id, 'password_reset');
+
+    if (userCodes.length === 0) {
+      throw new UnauthorizedError("No valid reset code found. Please request a new password reset.");
+    }
+
+    // Try to verify the code with any of the user's active codes
+    let verificationResult = null;
+    let validCodeId = null;
+
+    for (const userCode of userCodes) {
+      if (!userCode.isUsed && new Date() <= userCode.expiresAt) {
+        const result = await verifyTwoFactorCode(userCode.id, code, user.id);
+        if (result.isValid) {
+          verificationResult = result;
+          validCodeId = userCode.id;
           break;
         }
       }
     }
 
-    if (!foundCode || !codeId) {
-      throw new Error("Invalid reset code");
+    if (!verificationResult || !verificationResult.isValid) {
+      throw new UnauthorizedError("Invalid or expired reset code");
     }
 
-    // Check if expired
-    if (new Date() > foundCode.expiresAt) {
-      passwordResetCodes.delete(codeId);
-      throw new Error("Reset code has expired");
-    }
-
-    // Check max attempts
-    if (foundCode.attempts >= 5) {
-      passwordResetCodes.delete(codeId);
-      throw new Error("Maximum verification attempts exceeded");
-    }
-
-    // Increment attempts
-    foundCode.attempts++;
-
-    // Mark as used
-    foundCode.isUsed = true;
-    passwordResetCodes.delete(codeId);
-
-  } catch (error) {
-    throw new Error("Invalid or expired reset code");
-  }
-
-  // Check if new password is same as current (if preventReuse is enabled)
-  if (preventReuse && user.password) {
-    try {
-      // Use the same hash utility that Authrix uses
-      const { verifyPassword } = await import('../utils/hash');
-      const isSamePassword = await verifyPassword(newPassword, user.password);
-      if (isSamePassword) {
-        throw new Error("New password cannot be the same as your current password");
+    // Check if new password is same as current (if preventReuse is enabled)
+    if (preventReuse && user.password) {
+      try {
+        const isSamePassword = await verifyPassword(newPassword, user.password);
+        if (isSamePassword) {
+          throw new BadRequestError("New password cannot be the same as your current password");
+        }
+      } catch (error) {
+        // If comparison fails, continue (don't block password reset)
+        console.warn('[AUTHRIX] Could not compare passwords for reuse prevention:', error);
       }
-    } catch (error) {
-      // If comparison fails, continue (don't block password reset)
-      console.warn('[AUTHRIX] Could not compare passwords for reuse prevention:', error);
     }
-  }
 
-  // Hash new password
-  const hashedPassword = await hashPassword(newPassword);
+    // Hash new password
+    const hashedPassword = await hashPassword(newPassword, {
+      skipValidation: skipPasswordValidation
+    });
 
-  // Update user password
-  try {
+    // Update user password
     let updatedUser;
     if (db.updateUser) {
-      updatedUser = await db.updateUser(user.id, { 
+      updatedUser = await db.updateUser(user.id, {
         password: hashedPassword,
-        passwordChangedAt: new Date()
+        passwordChangedAt: new Date(),
+        mustChangePassword: false // Reset the flag since they just changed it
       });
     } else {
-      throw new Error("Database adapter does not support password updates");
+      throw new InternalServerError("Database adapter does not support password updates");
     }
 
     if (!updatedUser) {
-      throw new Error("Failed to update password");
+      throw new InternalServerError("Failed to update password");
     }
 
+    // Clear rate limiting on successful reset
+    clearPasswordResetRateLimit(normalizedEmail);
+
     // TODO: Invalidate all sessions if requested
-    // This would require session management which isn't implemented yet
     if (invalidateAllSessions) {
-      // For JWT tokens, you would need to implement token blacklisting
-      // or change the user's secret/salt to invalidate all existing tokens
       console.log('[AUTHRIX] Session invalidation not implemented yet');
+      // This would require:
+      // 1. Token blacklisting for JWTs
+      // 2. Session management in database
+      // 3. User token version/salt update
     }
 
     return {
@@ -406,131 +384,169 @@ export async function resetPasswordWithCode(
         id: updatedUser.id,
         email: updatedUser.email,
         username: updatedUser.username
-      }
+      },
+      mustChangePassword: false
     };
 
   } catch (error) {
-    throw new Error(`Failed to reset password: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.error('[AUTHRIX] Password reset error:', error);
+
+    if (error instanceof BadRequestError || error instanceof UnauthorizedError) {
+      throw error;
+    }
+
+    throw new InternalServerError(`Failed to reset password: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 /**
- * Generate a secure temporary password
+ * Enhanced temporary password generation with better security
  */
 export function generateTemporaryPassword(length: number = 12): string {
-  const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
-  let password = "";
-  
-  // Ensure at least one character from each required set
-  password += "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[Math.floor(Math.random() * 26)]; // uppercase
-  password += "abcdefghijklmnopqrstuvwxyz"[Math.floor(Math.random() * 26)]; // lowercase
-  password += "0123456789"[Math.floor(Math.random() * 10)]; // number
-  password += "!@#$%^&*"[Math.floor(Math.random() * 8)]; // special
-  
-  // Fill the rest randomly
-  for (let i = password.length; i < length; i++) {
-    password += charset[Math.floor(Math.random() * charset.length)];
+  if (length < 8 || length > 32) {
+    throw new BadRequestError('Temporary password length must be between 8 and 32 characters');
   }
-  
-  // Shuffle the password
-  return password.split('').sort(() => Math.random() - 0.5).join('');
+
+  return generateSecurePassword(length, {
+    includeLowercase: true,
+    includeUppercase: true,
+    includeNumbers: true,
+    includeSymbols: true,
+    excludeSimilar: true
+  });
 }
 
 /**
- * Send temporary password to user (alternative to code-based reset)
+ * Enhanced temporary password sending with 2FA integration
  */
 export async function sendTemporaryPassword(
   email: string,
   options: ForgotPasswordOptions & { temporaryPasswordLength?: number } = {}
 ): Promise<ForgotPasswordResult> {
   const db = authConfig.db;
-  
+
   if (!db) {
-    throw new Error("Database not configured. Make sure initAuth() is called before using forgot password functions.");
+    throw new InternalServerError("Database not configured. Make sure initAuth() is called before using forgot password functions.");
   }
 
   const {
     temporaryPasswordLength = 12,
     requireExistingUser = true,
-    customEmailTemplate
+    customEmailTemplate,
+    rateLimitDelay = 60
   } = options;
+
+  // Input validation
+  if (!email?.trim()) {
+    throw new BadRequestError("Email is required");
+  }
 
   const normalizedEmail = email.toLowerCase().trim();
 
-  // Find user
-  const user = await db.findUserByEmail(normalizedEmail);
-  
-  if (!user && requireExistingUser) {
-    return {
-      success: true,
-      message: "If an account with this email exists, a temporary password has been sent."
-    };
+  // Validate email format
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(normalizedEmail)) {
+    throw new BadRequestError("Invalid email format");
   }
 
-  if (!user && !requireExistingUser) {
-    throw new Error("No account found with this email address.");
+  // Check rate limiting
+  const rateLimitCheck = checkPasswordResetRateLimit(normalizedEmail, rateLimitDelay);
+  if (!rateLimitCheck.allowed) {
+    const message = rateLimitCheck.blockedUntil
+      ? `Too many password reset attempts. Try again after ${rateLimitCheck.blockedUntil.toLocaleTimeString()}`
+      : `Please wait ${rateLimitCheck.nextAttemptIn} seconds before requesting another temporary password.`;
+    throw new BadRequestError(message);
   }
 
-  // Generate temporary password
-  const temporaryPassword = generateTemporaryPassword(temporaryPasswordLength);
-  const hashedPassword = await hashPassword(temporaryPassword);
-
-  // Update user password
   try {
+    // Find user
+    const user = await db.findUserByEmail(normalizedEmail);
+
+    if (!user && requireExistingUser) {
+      return {
+        success: true,
+        message: "If an account with this email exists, a temporary password has been sent."
+      };
+    }
+
+    if (!user && !requireExistingUser) {
+      throw new BadRequestError("No account found with this email address.");
+    }
+
+    // Generate secure temporary password
+    const temporaryPassword = generateTemporaryPassword(temporaryPasswordLength);
+    const hashedPassword = await hashPassword(temporaryPassword);
+
+    // Update user password
     let updatedUser;
     if (db.updateUser) {
-      updatedUser = await db.updateUser(user!.id, { 
+      updatedUser = await db.updateUser(user!.id, {
         password: hashedPassword,
         passwordChangedAt: new Date(),
-        mustChangePassword: true // Flag to force password change on next login
+        mustChangePassword: true // Force password change on next login
       });
     } else {
-      throw new Error("Database adapter does not support password updates");
+      throw new InternalServerError("Database adapter does not support password updates");
     }
 
     if (!updatedUser) {
-      throw new Error("Failed to update password");
+      throw new InternalServerError("Failed to update password");
     }
 
-    // Prepare email content
-    let emailSubject = "Temporary Password";
-    let emailText = `Your temporary password is: ${temporaryPassword}. Please log in and change your password immediately.`;
-    let emailHtml: string | undefined;
+    // Clear rate limiting on successful operation
+    clearPasswordResetRateLimit(normalizedEmail);
 
-    if (customEmailTemplate) {
-      const template = customEmailTemplate(normalizedEmail, temporaryPassword, user?.username);
-      emailSubject = template.subject;
-      emailText = template.text;
-      emailHtml = template.html;
-    } else {
-      emailHtml = `
-        <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
-          <h2 style="color: #333; text-align: center;">Temporary Password</h2>
-          <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <p>Hello${user?.username ? ` ${user.username}` : ''},</p>
-            <p>We've generated a temporary password for your account:</p>
-            <div style="text-align: center; margin: 20px 0;">
-              <span style="background: #dc3545; color: white; padding: 12px 24px; border-radius: 4px; font-size: 16px; font-weight: bold; display: inline-block;">${temporaryPassword}</span>
-            </div>
-            <p><strong>⚠️ Please log in and change this password immediately for security.</strong></p>
-            <p>If you didn't request this password reset, please contact support immediately.</p>
-          </div>
-          <p style="color: #666; font-size: 12px; text-align: center;">
-            This is an automated message, please do not reply.
-          </p>
-        </div>
-      `;
-    }
-
-    // Send email
+    // Log temporary password (in production, send via email service)
     console.log(`[AUTHRIX] Temporary password for ${normalizedEmail}: ${temporaryPassword}`);
+    console.log(`[AUTHRIX] User must change password on next login`);
 
     return {
       success: true,
-      message: "Temporary password sent to your email address."
+      message: "Temporary password sent to your email address. Please log in and change your password immediately."
     };
 
   } catch (error) {
-    throw new Error(`Failed to send temporary password: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.error('[AUTHRIX] Temporary password error:', error);
+
+    if (error instanceof BadRequestError) {
+      throw error;
+    }
+
+    throw new InternalServerError(`Failed to send temporary password: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
+}
+
+/**
+ * Clear rate limit store (for testing purposes)
+ */
+export function clearRateLimitStore(): void {
+  rateLimitStore.clear();
+}
+
+/**
+ * Get password reset statistics (for admin/monitoring)
+ */
+export function getPasswordResetStats(): {
+  activeRateLimits: number;
+  blockedEmails: string[];
+  totalAttempts: number;
+} {
+  const now = Date.now();
+  let totalAttempts = 0;
+  const blockedEmails: string[] = [];
+
+  for (const [key, attempts] of Array.from(rateLimitStore.entries())) {
+    totalAttempts += attempts.count;
+
+    if (attempts.blockedUntil && now < attempts.blockedUntil) {
+      const email = key.replace('forgot_password_', '');
+      blockedEmails.push(email);
+    }
+  }
+
+  return {
+    activeRateLimits: rateLimitStore.size,
+    blockedEmails,
+    totalAttempts
+  };
 }

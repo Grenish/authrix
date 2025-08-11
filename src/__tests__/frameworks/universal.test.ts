@@ -4,7 +4,8 @@ import {
   logoutUniversal, 
   validateAuth,
   getAuthTokenFromCookies,
-  parseCookies
+  parseCookies,
+  type UniversalLogoutResult
 } from '../../frameworks/universal';
 
 // Mock all dependencies
@@ -63,19 +64,16 @@ describe('Universal Framework', () => {
           maxAge: 1000 * 60 * 60 * 24 * 7,
           sameSite: 'lax' as const,
           path: '/'
-        }
+        },
+        isNewUser: true
       };
       
       mockSignupCore.mockResolvedValueOnce(mockResponse);
 
       const result = await signupUniversal('test@example.com', 'password');
 
-      expect(mockSignupCore).toHaveBeenCalledWith('test@example.com', 'password');
-      expect(result).toEqual({
-        user: mockResponse.user,
-        token: mockResponse.token,
-        cookieOptions: mockResponse.cookieOptions
-      });
+  expect(mockSignupCore).toHaveBeenCalledWith('test@example.com', 'password');
+  expect(result).toEqual(mockResponse);
     });
 
     it('should handle signup error', async () => {
@@ -108,12 +106,8 @@ describe('Universal Framework', () => {
 
       const result = await signinUniversal('test@example.com', 'password');
 
-      expect(mockSigninCore).toHaveBeenCalledWith('test@example.com', 'password');
-      expect(result).toEqual({
-        user: mockResponse.user,
-        token: mockResponse.token,
-        cookieOptions: mockResponse.cookieOptions
-      });
+  expect(mockSigninCore).toHaveBeenCalledWith('test@example.com', 'password');
+  expect(result).toEqual(mockResponse);
     });
 
     it('should handle signin error', async () => {
@@ -130,16 +124,21 @@ describe('Universal Framework', () => {
 
   describe('logoutUniversal', () => {
     it('should logout successfully', async () => {
-      const mockResponse = {
-        cookieName: 'auth-token',
-        cookieOptions: {
-          httpOnly: true,
-          secure: false,
-          sameSite: 'lax' as const,
-          path: '/',
-          expires: new Date(0)
-        },
-        message: 'Logged out successfully'
+      const mockResponse: UniversalLogoutResult = {
+        success: true,
+        message: 'Logged out successfully',
+        cookiesToClear: [
+          {
+            name: 'auth-token',
+            options: {
+              httpOnly: true,
+              secure: false,
+              sameSite: 'lax',
+              path: '/',
+              expires: new Date(0)
+            }
+          }
+        ]
       };
       
       mockLogoutCore.mockReturnValueOnce(mockResponse);
@@ -147,11 +146,7 @@ describe('Universal Framework', () => {
       const result = await logoutUniversal();
 
       expect(mockLogoutCore).toHaveBeenCalled();
-      expect(result).toEqual({
-        cookieName: mockResponse.cookieName,
-        cookieOptions: mockResponse.cookieOptions,
-        message: mockResponse.message
-      });
+      expect(result).toEqual(mockResponse);
     });
   });
 

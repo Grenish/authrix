@@ -6,6 +6,11 @@
 export { 
   handleGoogleSSO, 
   handleGitHubSSO, 
+  handleAppleSSO,
+  handleDiscordSSO,
+  handleFacebookSSO,
+  handleLinkedInSSO,
+  handleXSSO,
   handleCustomSSO,
   processSSOAuthentication,
   generateSSOState,

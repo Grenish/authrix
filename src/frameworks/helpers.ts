@@ -20,6 +20,11 @@ import {
 } from "../core/forgotPassword";
 import { getGoogleOAuthURL } from "../providers/google";
 import { getGitHubOAuthURL } from "../providers/github";
+import { getAppleOAuthURL } from "../providers/apple";
+import { getDiscordOAuthURL } from "../providers/discord";
+import { getFacebookOAuthURL } from "../providers/facebook";
+import { getLinkedInOAuthURL } from "../providers/linkedin";
+import { getXOAuthURL } from "../providers/x";
 
 /**
  * Universal SSO helpers that work with any framework
@@ -30,7 +35,7 @@ export const ssoHelpers = {
    */
   getGoogleAuthUrl(redirectUrl: string = '/dashboard'): string {
     const state = generateSSOState({ redirect: redirectUrl });
-    return getGoogleOAuthURL(state);
+    return getGoogleOAuthURL({ state });
   },
 
   /**
@@ -38,14 +43,55 @@ export const ssoHelpers = {
    */
   getGitHubAuthUrl(redirectUrl: string = '/dashboard'): string {
     const state = generateSSOState({ redirect: redirectUrl });
-    return getGitHubOAuthURL(state);
+    return getGitHubOAuthURL({ state });
+  },
+
+  /**
+   * Get Apple OAuth URL with state
+   */
+  getAppleAuthUrl(redirectUrl: string = '/dashboard'): string {
+    const state = generateSSOState({ redirect: redirectUrl });
+    return getAppleOAuthURL({ state });
+  },
+
+  /**
+   * Get Discord OAuth URL with state
+   */
+  getDiscordAuthUrl(redirectUrl: string = '/dashboard'): string {
+    const state = generateSSOState({ redirect: redirectUrl });
+    return getDiscordOAuthURL({ state });
+  },
+
+  /**
+   * Get Facebook OAuth URL with state
+   */
+  getFacebookAuthUrl(redirectUrl: string = '/dashboard'): string {
+    const state = generateSSOState({ redirect: redirectUrl });
+    return getFacebookOAuthURL({ state });
+  },
+
+  /**
+   * Get LinkedIn OAuth URL with state
+   */
+  getLinkedInAuthUrl(redirectUrl: string = '/dashboard'): string {
+    const state = generateSSOState({ redirect: redirectUrl });
+    return getLinkedInOAuthURL({ state });
+  },
+
+  /**
+   * Get X/Twitter OAuth URL with state
+   */
+  async getXAuthUrl(redirectUrl: string = '/dashboard'): Promise<string> {
+    const state = generateSSOState({ redirect: redirectUrl });
+    const result = await getXOAuthURL({ state });
+    return result.url;
   },
 
   /**
    * Handle OAuth callback (works with any provider)
    */
   async handleCallback(
-    provider: 'google' | 'github',
+    provider: 'google' | 'github' | 'apple' | 'discord' | 'facebook' | 'linkedin' | 'x',
     code: string,
     state: string,
     options: SSOOptions = {}
@@ -54,9 +100,33 @@ export const ssoHelpers = {
     const stateData = verifySSOState(state);
     
     // Handle SSO based on provider
-    const result = provider === 'google' 
-      ? await handleGoogleSSO(code, options)
-      : await handleGitHubSSO(code, options);
+    let result;
+    switch (provider) {
+      case 'google':
+        result = await handleGoogleSSO(code, options);
+        break;
+      case 'github':
+        result = await handleGitHubSSO(code, options);
+        break;
+      case 'apple':
+        result = await (await import('../core/sso')).handleAppleSSO(code, options);
+        break;
+      case 'discord':
+        result = await (await import('../core/sso')).handleDiscordSSO(code, options);
+        break;
+      case 'facebook':
+        result = await (await import('../core/sso')).handleFacebookSSO(code, options);
+        break;
+      case 'linkedin':
+        result = await (await import('../core/sso')).handleLinkedInSSO(code, options);
+        break;
+      case 'x':
+        // For X we require state during callback for PKCE verification
+        result = await (await import('../core/sso')).handleXSSO(code, state, options);
+        break;
+      default:
+        throw new Error(`Unsupported provider: ${provider}`);
+    }
     
     return {
       ...result,
@@ -97,182 +167,3 @@ export const forgotPasswordHelpers = {
     return await resetPasswordWithCode(email, code, newPassword, options);
   }
 };
-
-/**
- * Example usage with Next.js App Router
- * 
- * // app/api/auth/google/route.ts
- * import { ssoHelpers } from '@/lib/authrix/frameworks/helpers';
- * 
- * export async function GET(request: NextRequest) {
- *   const url = new URL(request.url);
- *   const redirectUrl = url.searchParams.get('redirect') || '/dashboard';
- *   const authUrl = ssoHelpers.getGoogleAuthUrl(redirectUrl);
- *   return NextResponse.redirect(authUrl);
- * }
- * 
- * // app/api/auth/google/callback/route.ts
- * export async function GET(request: NextRequest) {
- *   try {
- *     const url = new URL(request.url);
- *     const code = url.searchParams.get('code');
- *     const state = url.searchParams.get('state');
- *     
- *     if (!code || !state) {
- *       return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
- *     }
- * 
- *     const result = await ssoHelpers.handleCallback('google', code, state);
- *     
- *     const response = NextResponse.redirect(result.redirectUrl);
- *     response.cookies.set('auth_token', result.token, result.cookieOptions);
- *     return response;
- *   } catch (error) {
- *     return NextResponse.redirect('/auth/error?message=' + encodeURIComponent(error.message));
- *   }
- * }
- * 
- * // app/api/auth/forgot-password/route.ts
- * import { forgotPasswordHelpers } from '@/lib/authrix/frameworks/helpers';
- * 
- * export async function POST(request: NextRequest) {
- *   try {
- *     const { email } = await request.json();
- *     const result = await forgotPasswordHelpers.initiate(email);
- *     return NextResponse.json(result);
- *   } catch (error) {
- *     return NextResponse.json({ error: error.message }, { status: 500 });
- *   }
- * }
- * 
- * // app/api/auth/reset-password/route.ts
- * export async function POST(request: NextRequest) {
- *   try {
- *     const { email, code, newPassword } = await request.json();
- *     const result = await forgotPasswordHelpers.reset(email, code, newPassword);
- *     return NextResponse.json(result);
- *   } catch (error) {
- *     return NextResponse.json({ error: error.message }, { status: 500 });
- *   }
- * }
- */
-
-/**
- * Example usage with Express.js
- * 
- * import express from 'express';
- * import { ssoHelpers, forgotPasswordHelpers } from './authrix/frameworks/helpers';
- * 
- * const router = express.Router();
- * 
- * // Google OAuth initiation
- * router.get('/auth/google', (req, res) => {
- *   const redirectUrl = req.query.redirect || '/dashboard';
- *   const authUrl = ssoHelpers.getGoogleAuthUrl(redirectUrl);
- *   res.redirect(authUrl);
- * });
- * 
- * // Google OAuth callback
- * router.get('/auth/google/callback', async (req, res) => {
- *   try {
- *     const { code, state } = req.query;
- *     const result = await ssoHelpers.handleCallback('google', code, state);
- *     
- *     res.cookie('auth_token', result.token, result.cookieOptions);
- *     res.redirect(result.redirectUrl);
- *   } catch (error) {
- *     res.redirect('/auth/error?message=' + encodeURIComponent(error.message));
- *   }
- * });
- * 
- * // Forgot password
- * router.post('/auth/forgot-password', async (req, res) => {
- *   try {
- *     const { email } = req.body;
- *     const result = await forgotPasswordHelpers.initiate(email);
- *     res.json(result);
- *   } catch (error) {
- *     res.status(500).json({ error: error.message });
- *   }
- * });
- * 
- * // Reset password
- * router.post('/auth/reset-password', async (req, res) => {
- *   try {
- *     const { email, code, newPassword } = req.body;
- *     const result = await forgotPasswordHelpers.reset(email, code, newPassword);
- *     res.json(result);
- *   } catch (error) {
- *     res.status(500).json({ error: error.message });
- *   }
- * });
- */
-
-/**
- * Example usage with React (client-side)
- * 
- * import { ssoHelpers } from './authrix/frameworks/helpers';
- * 
- * // Component for social login
- * export function SocialLoginButtons() {
- *   const handleGoogleLogin = () => {
- *     const authUrl = ssoHelpers.getGoogleAuthUrl(window.location.pathname);
- *     window.location.href = authUrl;
- *   };
- * 
- *   const handleGitHubLogin = () => {
- *     const authUrl = ssoHelpers.getGitHubAuthUrl(window.location.pathname);
- *     window.location.href = authUrl;
- *   };
- * 
- *   return (
- *     <div>
- *       <button onClick={handleGoogleLogin}>Login with Google</button>
- *       <button onClick={handleGitHubLogin}>Login with GitHub</button>
- *     </div>
- *   );
- * }
- * 
- * // Component for forgot password
- * export function ForgotPasswordForm() {
- *   const [email, setEmail] = useState('');
- *   const [isLoading, setIsLoading] = useState(false);
- * 
- *   const handleSubmit = async (e) => {
- *     e.preventDefault();
- *     setIsLoading(true);
- *     
- *     try {
- *       const response = await fetch('/api/auth/forgot-password', {
- *         method: 'POST',
- *         headers: { 'Content-Type': 'application/json' },
- *         body: JSON.stringify({ email })
- *       });
- *       
- *       const result = await response.json();
- *       if (result.success) {
- *         alert('Password reset code sent to your email');
- *       }
- *     } catch (error) {
- *       alert('Error: ' + error.message);
- *     } finally {
- *       setIsLoading(false);
- *     }
- *   };
- * 
- *   return (
- *     <form onSubmit={handleSubmit}>
- *       <input
- *         type="email"
- *         value={email}
- *         onChange={(e) => setEmail(e.target.value)}
- *         placeholder="Enter your email"
- *         required
- *       />
- *       <button type="submit" disabled={isLoading}>
- *         {isLoading ? 'Sending...' : 'Send Reset Code'}
- *       </button>
- *     </form>
- *   );
- * }
- */

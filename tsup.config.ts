@@ -14,6 +14,7 @@ export default defineConfig({
         "src/adapters/index.ts",
         "src/adapters/mongo.ts",
         "src/adapters/postgresql.ts",
+    "src/adapters/prisma.ts",
         "src/providers/google.ts",
         "src/providers/github.ts"
     ],
@@ -44,7 +45,8 @@ export default defineConfig({
         "next/navigation",
         // React dependencies (optional peer dependencies)
         "react",
-        "react-dom"
+    "react-dom",
+    "@prisma/client"
     ],
     esbuildOptions(options) {
         // Enable advanced minification

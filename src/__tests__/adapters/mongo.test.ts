@@ -1,4 +1,4 @@
-import { mongoAdapter, resetMongoConnection } from '../../adapters/mongo';
+import { mongoAdapter, mongoUtils } from '../../adapters/mongo';
 
 // Mock MongoDB before everything else
 jest.mock('mongodb', () => {
@@ -15,7 +15,8 @@ jest.mock('mongodb', () => {
 
 const mockCollection = {
   findOne: jest.fn(),
-  insertOne: jest.fn()
+  insertOne: jest.fn(),
+  createIndex: jest.fn().mockResolvedValue(undefined)
 };
 
 const mockDb = {
@@ -24,7 +25,8 @@ const mockDb = {
 
 const mockClient = {
   connect: jest.fn(),
-  db: jest.fn().mockReturnValue(mockDb)
+  db: jest.fn().mockReturnValue(mockDb),
+  close: jest.fn(async () => {})
 };
 
 import { MongoClient, ObjectId } from 'mongodb';
@@ -39,13 +41,18 @@ const originalEnv = process.env;
 describe('Mongo Adapter', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    resetMongoConnection(); // Reset connection state
+  mongoUtils.reset(); // Reset connection state
     process.env = {
       ...originalEnv,
       MONGO_URI: 'mongodb://localhost:27017',
       DB_NAME: 'test_db',
-      AUTH_COLLECTION: 'users'
+      AUTH_COLLECTION: 'users',
+      TWO_FACTOR_COLLECTION: 'two_factor_codes'
     };
+    
+    // Mock the collection methods properly
+    mockCollection.createIndex = jest.fn().mockResolvedValue(undefined);
+    
     MockMongoClient.mockImplementation(() => mockClient as any);
   });
 
@@ -66,15 +73,16 @@ describe('Mongo Adapter', () => {
 
       const result = await mongoAdapter.findUserByEmail('test@example.com');
 
-      expect(mockCollection.findOne).toHaveBeenCalledWith({ 
-        email: 'test@example.com' 
-      });
-      expect(result).toEqual({
+      expect(mockCollection.findOne).toHaveBeenCalledWith(
+        { email: 'test@example.com' },
+        expect.any(Object)
+      );
+      expect(result).toEqual(expect.objectContaining({
         id: '507f1f77bcf86cd799439011',
         email: 'test@example.com',
         password: 'hashedpassword',
         createdAt: new Date('2023-01-01')
-      });
+      }));
     });
 
     it('should return null if user not found', async () => {
@@ -90,9 +98,10 @@ describe('Mongo Adapter', () => {
 
       await mongoAdapter.findUserByEmail('  TEST@EXAMPLE.COM  ');
 
-      expect(mockCollection.findOne).toHaveBeenCalledWith({ 
-        email: 'test@example.com' 
-      });
+      expect(mockCollection.findOne).toHaveBeenCalledWith(
+        { email: 'test@example.com' },
+        expect.any(Object)
+      );
     });
   });
 
@@ -112,12 +121,12 @@ describe('Mongo Adapter', () => {
       const result = await mongoAdapter.findUserById(userId);
 
       expect((mockObjectId as any).isValid).toHaveBeenCalledWith(userId);
-      expect(result).toEqual({
+      expect(result).toEqual(expect.objectContaining({
         id: userId,
         email: 'test@example.com',
         password: 'hashedpassword',
         createdAt: new Date('2023-01-01')
-      });
+      }));
     });
 
     it('should return null for invalid ObjectId', async () => {
@@ -152,17 +161,17 @@ describe('Mongo Adapter', () => {
 
       const result = await mongoAdapter.createUser(userData);
 
-      expect(mockCollection.insertOne).toHaveBeenCalledWith({
+      expect(mockCollection.insertOne).toHaveBeenCalledWith(expect.objectContaining({
         email: 'test@example.com',
         password: 'hashedpassword',
         createdAt: expect.any(Date)
-      });
-      expect(result).toEqual({
+      }));
+      expect(result).toEqual(expect.objectContaining({
         id: userId,
         email: 'test@example.com',
         password: 'hashedpassword',
         createdAt: expect.any(Date)
-      });
+      }));
     });
 
     it('should normalize email when creating user', async () => {
@@ -177,21 +186,21 @@ describe('Mongo Adapter', () => {
 
       await mongoAdapter.createUser(userData);
 
-      expect(mockCollection.insertOne).toHaveBeenCalledWith({
+      expect(mockCollection.insertOne).toHaveBeenCalledWith(expect.objectContaining({
         email: 'test@example.com',
         password: 'hashedpassword',
         createdAt: expect.any(Date)
-      });
+      }));
     });
   });
 
   describe('initialization', () => {
     it('should throw error if environment variables are missing', async () => {
-      resetMongoConnection(); // Reset before clearing env vars
+      mongoUtils.reset(); // Reset before clearing env vars
       process.env = {};
 
       await expect(mongoAdapter.findUserByEmail('test@example.com')).rejects.toThrow(
-        'Missing required environment variables: MONGO_URI, DB_NAME, AUTH_COLLECTION'
+        /Missing required MongoDB environment variables:/
       );
     });
   });

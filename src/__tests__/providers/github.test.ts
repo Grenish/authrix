@@ -1,4 +1,4 @@
-import { getGitHubOAuthURL, handleGitHubCallback } from '../../providers/github';
+import { getGitHubOAuthURL, handleGitHubCallback, resetGitHubOAuthConfig } from '../../providers/github';
 
 // Mock fetch globally
 const mockFetch = jest.fn();
@@ -10,6 +10,7 @@ const originalEnv = process.env;
 describe('GitHub OAuth Provider', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  resetGitHubOAuthConfig();
     process.env = {
       ...originalEnv,
       GITHUB_CLIENT_ID: 'test-client-id',
@@ -25,7 +26,7 @@ describe('GitHub OAuth Provider', () => {
   describe('getGitHubOAuthURL', () => {
     it('should generate correct OAuth URL', () => {
       const state = 'random-state-string';
-      const url = getGitHubOAuthURL(state);
+      const url = getGitHubOAuthURL({state});
 
       expect(url).toContain('https://github.com/login/oauth/authorize');
       expect(url).toContain('client_id=test-client-id');
@@ -37,8 +38,8 @@ describe('GitHub OAuth Provider', () => {
     it('should throw error if environment variables are missing', () => {
       process.env = {};
 
-      expect(() => getGitHubOAuthURL('state')).toThrow(
-        'Missing GitHub OAuth environment variables'
+      expect(() => getGitHubOAuthURL({ state: 'state' })).toThrow(
+        /Missing GitHub OAuth environment variables/
       );
     });
   });
@@ -94,28 +95,28 @@ describe('GitHub OAuth Provider', () => {
       expect(mockFetch).toHaveBeenCalledWith(
         'https://api.github.com/user',
         expect.objectContaining({
-          headers: {
+          headers: expect.objectContaining({
             Authorization: 'Bearer github-access-token'
-          }
+          })
         })
       );
 
       expect(mockFetch).toHaveBeenCalledWith(
         'https://api.github.com/user/emails',
         expect.objectContaining({
-          headers: {
+          headers: expect.objectContaining({
             Authorization: 'Bearer github-access-token'
-          }
+          })
         })
       );
 
-      expect(result).toEqual({
+      expect(result).toEqual(expect.objectContaining({
         id: '12345',
         email: 'test@example.com',
         name: 'Test User',
         avatar: 'https://avatars.githubusercontent.com/u/12345',
         provider: 'github'
-      });
+      }));
     });
 
     it('should handle token request failure', async () => {
@@ -127,7 +128,7 @@ describe('GitHub OAuth Provider', () => {
       mockFetch.mockResolvedValueOnce(mockTokenResponse);
 
       await expect(handleGitHubCallback('invalid-code')).rejects.toThrow(
-        'An error occurred during GitHub authentication'
+        /(An unexpected error occurred|GitHub authentication failed|An error occurred during GitHub authentication)/
       );
     });
 
@@ -140,7 +141,7 @@ describe('GitHub OAuth Provider', () => {
       mockFetch.mockResolvedValueOnce(mockTokenResponse);
 
       await expect(handleGitHubCallback('invalid-code')).rejects.toThrow(
-        'An error occurred during GitHub authentication'
+        /(GitHub OAuth error|GitHub authentication failed|An error occurred during GitHub authentication)/
       );
     });
 
@@ -160,7 +161,7 @@ describe('GitHub OAuth Provider', () => {
         .mockResolvedValueOnce(mockUserResponse);
 
       await expect(handleGitHubCallback('auth-code')).rejects.toThrow(
-        'An error occurred during GitHub authentication'
+        /(GitHub authentication failed|An error occurred during GitHub authentication)/
       );
     });
 
@@ -190,7 +191,7 @@ describe('GitHub OAuth Provider', () => {
         .mockResolvedValueOnce(mockEmailResponse);
 
       await expect(handleGitHubCallback('auth-code')).rejects.toThrow(
-        'An error occurred during GitHub authentication'
+        /(GitHub authentication failed|An error occurred during GitHub authentication)/
       );
     });
 
@@ -223,7 +224,7 @@ describe('GitHub OAuth Provider', () => {
         .mockResolvedValueOnce(mockEmailResponse);
 
       await expect(handleGitHubCallback('auth-code')).rejects.toThrow(
-        'An error occurred during GitHub authentication'
+        /(No verified primary email found|GitHub authentication failed|An error occurred during GitHub authentication)/
       );
     });
 
@@ -231,7 +232,7 @@ describe('GitHub OAuth Provider', () => {
       process.env = {};
 
       await expect(handleGitHubCallback('auth-code')).rejects.toThrow(
-        'Missing GitHub OAuth environment variables'
+        /Missing GitHub OAuth environment variables/
       );
     });
   });

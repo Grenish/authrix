@@ -33,9 +33,20 @@ export {
   createAuthenticatedResponse,
   createTokenValidationHandler,
   createTokenValidationHandlerPages,
+  // API Route Handlers - App Router
+  createSignupHandler,
+  createSigninHandler,
+  createLogoutHandler,
+  createCurrentUserHandler,
+  // API Route Handlers - Pages Router
+  createSignupHandlerPages,
+  createSigninHandlerPages,
+  createLogoutHandlerPages,
+  createCurrentUserHandlerPages,
   // Environment detection and debugging
   getNextJsEnvironmentInfo,
   redetectNextJsEnvironment,
+  resetEnvironmentDetection,
   forceNextJsAvailability
 } from "./frameworks/nextjs";
 

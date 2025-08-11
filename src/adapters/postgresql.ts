@@ -168,7 +168,9 @@ function rowToUser(row: any): AuthUser {
     password: row.password,
     username: row.username,
     firstName: row.first_name,
-    lastName: row.last_name,
+  lastName: row.last_name,
+  fullName: row.full_name,
+  profilePicture: row.profile_picture,
     createdAt: row.created_at,
     emailVerified: row.email_verified,
     emailVerifiedAt: row.email_verified_at,
@@ -256,7 +258,7 @@ export const postgresqlAdapter: AuthDbAdapter = {
     }
   },
 
-  async createUser({ email, password, username, firstName, lastName }): Promise<AuthUser> {
+  async createUser({ email, password, username, firstName, lastName, fullName, profilePicture }): Promise<AuthUser> {
     try {
       const pool = await getPool();
       const tableName = getUserTableName();
@@ -284,6 +286,16 @@ export const postgresqlAdapter: AuthDbAdapter = {
       if (lastName) {
         fields.push('last_name');
         values.push(lastName.trim());
+        placeholders.push(`$${paramCount++}`);
+      }
+      if (typeof fullName === 'string' && fullName.trim()) {
+        fields.push('full_name');
+        values.push(fullName.trim());
+        placeholders.push(`$${paramCount++}`);
+      }
+      if (typeof profilePicture === 'string' && profilePicture.trim()) {
+        fields.push('profile_picture');
+        values.push(profilePicture.trim());
         placeholders.push(`$${paramCount++}`);
       }
 
@@ -352,6 +364,14 @@ export const postgresqlAdapter: AuthDbAdapter = {
       if (data.lastName !== undefined) {
         updates.push(`last_name = $${paramCount++}`);
         values.push(data.lastName ? data.lastName.trim() : null);
+      }
+      if (data.fullName !== undefined) {
+        updates.push(`full_name = $${paramCount++}`);
+        values.push(data.fullName ? data.fullName.trim() : null);
+      }
+      if (data.profilePicture !== undefined) {
+        updates.push(`profile_picture = $${paramCount++}`);
+        values.push(data.profilePicture ? data.profilePicture.trim() : null);
       }
 
       if (updates.length === 0) {

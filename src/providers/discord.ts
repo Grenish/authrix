@@ -197,8 +197,8 @@ function getDiscordOAuthConfig(): DiscordOAuthConfig {
 
     throw new Error(
       `Missing Discord OAuth environment variables: ${missing.join(", ")}. ` +
-        `These are required when using Discord OAuth functionality. ` +
-        `Visit https://discord.com/developers/applications to create an application and obtain these values.`
+      `These are required when using Discord OAuth functionality. ` +
+      `Visit https://discord.com/developers/applications to create an application and obtain these values.`
     );
   }
 
@@ -235,7 +235,7 @@ async function discordApiRequest<T>(
     try {
       const errorJson = JSON.parse(errorText);
       errorMessage = errorJson.message || errorJson.error || errorMessage;
-    } catch {}
+    } catch { }
 
     // Handle rate limiting
     if (response.status === 429) {

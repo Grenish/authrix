@@ -28,10 +28,21 @@ export interface AuthErrorResult {
 
 export type AuthResponse = AuthResult | AuthErrorResult;
 
-export interface LogoutResult {
-  cookieName: string;
-  cookieOptions: CookieOptions;
+export interface UniversalLogoutResult {
+  success: boolean;
   message: string;
+  cookiesToClear: Array<{
+    name: string;
+    options: {
+      httpOnly: boolean;
+      secure: boolean;
+      sameSite: "lax" | "strict" | "none";
+      path: string;
+      expires: Date;
+      domain?: string;
+    };
+  }>;
+  redirectUrl?: string;
 }
 
 /**
@@ -68,8 +79,41 @@ export async function signinUniversal(email: string, password: string): Promise<
  * Framework-agnostic logout function
  * Returns cookie information for manual clearing
  */
-export function logoutUniversal(): LogoutResult {
+export function logoutUniversal(): UniversalLogoutResult {
   return logoutCore();
+}
+
+/**
+ * Helper function to get cookie clearing strings from logout result
+ * Useful for frameworks that need cookie strings
+ */
+export function getCookieClearingStrings(logoutResult: UniversalLogoutResult): string[] {
+  return logoutResult.cookiesToClear.map(cookie => 
+    createCookieString(cookie.name, '', {
+      ...cookie.options,
+      maxAge: 0 // Ensure cookie is cleared
+    })
+  );
+}
+
+/**
+ * Helper function to get the main auth cookie clearing info
+ * Returns the primary auth cookie that needs to be cleared
+ */
+export function getMainAuthCookie(logoutResult: UniversalLogoutResult): { name: string; clearingString: string } | null {
+  const authCookie = logoutResult.cookiesToClear.find(cookie => 
+    cookie.name === authConfig.cookieName
+  );
+  
+  if (!authCookie) return null;
+  
+  return {
+    name: authCookie.name,
+    clearingString: createCookieString(authCookie.name, '', {
+      ...authCookie.options,
+      maxAge: 0
+    })
+  };
 }
 
 /**

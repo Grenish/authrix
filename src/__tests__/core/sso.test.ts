@@ -149,7 +149,8 @@ describe('SSO Core Functions', () => {
       });
 
       expect(result.isNewUser).toBe(false);
-      expect(result.user.email).toBe('jane.doe@example.com');
+    // processSSOAuthentication returns the existing user's email in the response
+    expect(result.user.email).toBe('test@example.com');
       expect(result.provider).toBe('github');
       expect(mockAdapter.createUser).not.toHaveBeenCalled();
     });

@@ -2,15 +2,12 @@ import {
   createAuthMiddleware, 
   authMiddleware as expressAuthMiddleware,
   optionalAuthMiddleware,
-  type AuthenticatedRequest
 } from '../../middleware/flexibleAuth';
-import type { Request, Response, NextFunction } from 'express';
+import type { Response, NextFunction } from 'express';
 
 // Mock dependencies
 jest.mock('../../frameworks/universal', () => ({
   validateAuth: jest.fn(),
-  getAuthTokenFromCookies: jest.fn(),
-  parseCookies: jest.fn()
 }));
 
 jest.mock('../../config', () => ({
@@ -19,11 +16,10 @@ jest.mock('../../config', () => ({
   }
 }));
 
-import { validateAuth, getAuthTokenFromCookies, parseCookies } from '../../frameworks/universal';
+import { validateAuth } from '../../frameworks/universal';
 
 const mockValidateAuth = validateAuth as jest.MockedFunction<typeof validateAuth>;
-const mockGetAuthTokenFromCookies = getAuthTokenFromCookies as jest.MockedFunction<typeof getAuthTokenFromCookies>;
-const mockParseCookies = parseCookies as jest.MockedFunction<typeof parseCookies>;
+// No-op placeholders for removed helpers
 
 describe('Flexible Auth Middleware', () => {
   let mockReq: any;
@@ -93,15 +89,11 @@ describe('Flexible Auth Middleware', () => {
       };
 
       mockReq.headers = { cookie: 'auth-token=valid-token; other=value' };
-      mockParseCookies.mockReturnValueOnce({ 'auth-token': 'valid-token', other: 'value' });
-      mockGetAuthTokenFromCookies.mockReturnValueOnce('valid-token');
       mockValidateAuth.mockResolvedValueOnce(authResult);
 
       const middleware = createAuthMiddleware();
       await middleware(mockReq, mockRes, mockNext);
 
-      expect(mockParseCookies).toHaveBeenCalledWith('auth-token=valid-token; other=value');
-      expect(mockGetAuthTokenFromCookies).toHaveBeenCalledWith({ 'auth-token': 'valid-token', other: 'value' });
       expect(mockValidateAuth).toHaveBeenCalledWith('valid-token');
       expect(mockNext).toHaveBeenCalledWith();
     });
@@ -230,7 +222,7 @@ describe('Flexible Auth Middleware', () => {
       mockReq.cookies = { 'auth-token': 'valid-token' };
       mockValidateAuth.mockResolvedValueOnce(authResult);
 
-      expressAuthMiddleware(mockReq as AuthenticatedRequest, mockRes as Response, mockNext);
+  expressAuthMiddleware(mockReq as any, mockRes as Response, mockNext);
 
       // Wait for async operation
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -248,7 +240,7 @@ describe('Flexible Auth Middleware', () => {
 
       mockValidateAuth.mockResolvedValueOnce(authResult);
 
-      optionalAuthMiddleware(mockReq as AuthenticatedRequest, mockRes as Response, mockNext);
+  optionalAuthMiddleware(mockReq as any, mockRes as Response, mockNext);
 
       // Wait for async operation
       await new Promise(resolve => setTimeout(resolve, 0));

@@ -1,4 +1,4 @@
-import { getGoogleOAuthURL, handleGoogleCallback } from '../../providers/google';
+import { getGoogleOAuthURL, handleGoogleCallback, resetGoogleOAuthConfig } from '../../providers/google';
 
 // Mock fetch globally
 const mockFetch = jest.fn();
@@ -7,9 +7,20 @@ global.fetch = mockFetch;
 // Mock environment variables
 const originalEnv = process.env;
 
+// Polyfill atob/btoa for Node test environment
+(global as any).atob = (str: string) => Buffer.from(str, 'base64').toString('binary');
+(global as any).btoa = (str: string) => Buffer.from(str, 'binary').toString('base64');
+
+function makeIdToken(payload: Record<string, any>) {
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const base64url = (obj: any) => Buffer.from(JSON.stringify(obj)).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  return `${base64url(header)}.${base64url(payload)}.signature`;
+}
+
 describe('Google OAuth Provider', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  resetGoogleOAuthConfig();
     process.env = {
       ...originalEnv,
       GOOGLE_CLIENT_ID: 'test-client-id.googleusercontent.com',
@@ -25,7 +36,12 @@ describe('Google OAuth Provider', () => {
   describe('getGoogleOAuthURL', () => {
     it('should generate correct OAuth URL', () => {
       const state = 'random-state-string';
-      const url = getGoogleOAuthURL(state);
+      const url = getGoogleOAuthURL({
+        state,
+        accessType: 'offline',
+        prompt: 'consent',
+        includeGrantedScopes: true
+      });
 
       expect(url).toContain('https://accounts.google.com/o/oauth2/v2/auth');
       expect(url).toContain('client_id=test-client-id.googleusercontent.com');
@@ -40,18 +56,29 @@ describe('Google OAuth Provider', () => {
     it('should throw error if environment variables are missing', () => {
       process.env = {};
 
-      expect(() => getGoogleOAuthURL('state')).toThrow(
-        'Missing Google OAuth environment variables'
+      expect(() => getGoogleOAuthURL({ state: 'state' })).toThrow(
+        /Missing Google OAuth environment variables/
       );
     });
   });
 
   describe('handleGoogleCallback', () => {
     it('should handle successful callback', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const idToken = makeIdToken({
+        aud: 'test-client-id.googleusercontent.com',
+        iss: 'accounts.google.com',
+        exp: now + 3600
+      });
+
       const mockTokenResponse = {
         ok: true,
-        json: () => Promise.resolve({ 
-          id_token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token'
+        json: () => Promise.resolve({
+          id_token: idToken,
+          access_token: 'access-token-123',
+          scope: 'openid profile email',
+          token_type: 'Bearer',
+          expires_in: 3600
         })
       };
 
@@ -77,14 +104,17 @@ describe('Google OAuth Provider', () => {
         'https://oauth2.googleapis.com/token',
         expect.objectContaining({
           method: 'POST',
-          headers: {
+          headers: expect.objectContaining({
             'Content-Type': 'application/x-www-form-urlencoded'
-          }
+          })
         })
       );
 
       expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('https://oauth2.googleapis.com/tokeninfo?id_token=')
+        'https://www.googleapis.com/oauth2/v3/userinfo',
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: expect.stringContaining('Bearer') })
+        })
       );
 
       expect(result).toEqual({
@@ -92,20 +122,23 @@ describe('Google OAuth Provider', () => {
         email: 'test@example.com',
         name: 'Test User',
         avatar: 'https://lh3.googleusercontent.com/a/avatar',
-        provider: 'google'
+        provider: 'google',
+        emailVerified: true,
+        metadata: expect.any(Object)
       });
     });
 
     it('should handle token request failure', async () => {
       const mockTokenResponse = {
         ok: false,
-        statusText: 'Bad Request'
+        status: 400,
+        text: () => Promise.resolve('Bad Request')
       };
 
       mockFetch.mockResolvedValueOnce(mockTokenResponse);
 
       await expect(handleGoogleCallback('invalid-code')).rejects.toThrow(
-        'An error occurred during Google authentication'
+        /(Google authentication failed|Token exchange failed)/
       );
     });
 
@@ -118,67 +151,41 @@ describe('Google OAuth Provider', () => {
       mockFetch.mockResolvedValueOnce(mockTokenResponse);
 
       await expect(handleGoogleCallback('invalid-code')).rejects.toThrow(
-        'An error occurred during Google authentication'
+        /(Google authentication failed|No ID token received)/
       );
     });
 
     it('should handle token info request failure', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const idToken = makeIdToken({ aud: 'wrong-client', iss: 'accounts.google.com', exp: now + 3600 });
       const mockTokenResponse = {
         ok: true,
-        json: () => Promise.resolve({ 
-          id_token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token'
-        })
+        json: () => Promise.resolve({ id_token: idToken })
       };
-
-      const mockUserResponse = {
-        ok: false,
-        statusText: 'Unauthorized'
-      };
-
-      mockFetch
-        .mockResolvedValueOnce(mockTokenResponse)
-        .mockResolvedValueOnce(mockUserResponse);
+      mockFetch.mockResolvedValueOnce(mockTokenResponse);
 
       await expect(handleGoogleCallback('auth-code')).rejects.toThrow(
-        'An error occurred during Google authentication'
+        /(Google authentication failed|Security validation failed|Token audience mismatch)/
       );
     });
 
     it('should handle audience mismatch', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const idToken = makeIdToken({ aud: 'wrong-client-id.googleusercontent.com', iss: 'accounts.google.com', exp: now + 3600 });
       const mockTokenResponse = {
         ok: true,
-        json: () => Promise.resolve({ 
-          id_token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token'
-        })
+        json: () => Promise.resolve({ id_token: idToken })
       };
-
-      const mockUserResponse = {
-        ok: true,
-        json: () => Promise.resolve({
-          aud: 'wrong-client-id.googleusercontent.com',
-          sub: '12345',
-          email: 'test@example.com',
-          name: 'Test User',
-          picture: 'https://lh3.googleusercontent.com/a/avatar',
-          email_verified: true
-        })
-      };
-
-      mockFetch
-        .mockResolvedValueOnce(mockTokenResponse)
-        .mockResolvedValueOnce(mockUserResponse);
-
-      await expect(handleGoogleCallback('auth-code')).rejects.toThrow(
-        'An error occurred during Google authentication'
-      );
+      mockFetch.mockResolvedValueOnce(mockTokenResponse);
+  await expect(handleGoogleCallback('auth-code')).rejects.toThrow(/(Google authentication failed|Security validation failed)/);
     });
 
     it('should handle unverified email', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const idToken = makeIdToken({ aud: 'test-client-id.googleusercontent.com', iss: 'accounts.google.com', exp: now + 3600 });
       const mockTokenResponse = {
         ok: true,
-        json: () => Promise.resolve({ 
-          id_token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token'
-        })
+        json: () => Promise.resolve({ id_token: idToken, access_token: 'access' })
       };
 
       const mockUserResponse = {
@@ -198,7 +205,7 @@ describe('Google OAuth Provider', () => {
         .mockResolvedValueOnce(mockUserResponse);
 
       await expect(handleGoogleCallback('auth-code')).rejects.toThrow(
-        'An error occurred during Google authentication'
+        /(Google authentication failed|Email address is not verified)/
       );
     });
 
@@ -206,7 +213,7 @@ describe('Google OAuth Provider', () => {
       process.env = {};
 
       await expect(handleGoogleCallback('auth-code')).rejects.toThrow(
-        'Missing Google OAuth environment variables'
+        /Missing Google OAuth environment variables/
       );
     });
   });

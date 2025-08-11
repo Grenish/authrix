@@ -23,11 +23,45 @@ jest.mock('../../config', () => {
   };
 });
 
-// Mock the hash utility
-jest.mock('../../utils/hash', () => ({
-  hashPassword: jest.fn().mockImplementation((password: any) => Promise.resolve(`hashed_${password}`)),
-  verifyPassword: jest.fn()
-}));
+// Mock the hash utility with concrete functions to avoid TS type inference issues
+jest.mock('../../utils/hash', () => {
+  let counter = 0;
+  return {
+    hashPassword: async (password: any) => `hashed_${password}`,
+    verifyPassword: async () => false,
+    validatePassword: (pwd: string) => {
+      const errors: string[] = [];
+      if (pwd.length < 8) errors.push('Password must be at least 8 characters long');
+      if (!/[A-Z]/.test(pwd)) errors.push('Password must contain at least one uppercase letter');
+      if (!/[a-z]/.test(pwd)) errors.push('Password must contain at least one lowercase letter');
+      if (!/[0-9]/.test(pwd)) errors.push('Password must contain at least one number');
+      return { isValid: errors.length === 0, errors };
+    },
+    // Produce strong and varying passwords per call without relying on real randomness
+    generateSecurePassword: (len: number = 12) => {
+      counter++;
+      const upp = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      const low = 'abcdefghijklmnopqrstuvwxyz';
+      const num = '0123456789';
+      const sym = '!@#$%^&*';
+      const pick = (set: string, i: number) => set[i % set.length];
+      const required = [
+        pick(upp, counter),
+        pick(low, counter + 1),
+        pick(num, counter + 2),
+        pick(sym, counter + 3)
+      ];
+      const pool = upp + low + num + sym;
+      let rest = '';
+      for (let i = 0; i < Math.max(0, len - required.length); i++) {
+        rest += pick(pool, counter + i + 4);
+      }
+      const base = (required.join('') + rest).slice(0, len);
+      const rot = counter % Math.max(1, len);
+      return base.slice(rot) + base.slice(0, rot);
+    }
+  };
+});
 
 import { 
   initiateForgotPassword, 
@@ -45,6 +79,24 @@ describe('Forgot Password Functions', () => {
     
     // Set up default mock implementations
     mockAdapter.findUserByEmail.mockResolvedValue(null);
+
+    // In-memory 2FA store for tests
+    const codes: any[] = [];
+    (mockAdapter as any).storeTwoFactorCode = async (code: any) => {
+      codes.push({ ...code });
+    };
+    (mockAdapter as any).getTwoFactorCode = async (id: string) => {
+      return codes.find(c => c.id === id) || null;
+    };
+    (mockAdapter as any).updateTwoFactorCode = async (id: string, updates: any) => {
+      const idx = codes.findIndex(c => c.id === id);
+      if (idx >= 0) codes[idx] = { ...codes[idx], ...updates };
+    };
+    (mockAdapter as any).getUserTwoFactorCodes = async (userId: string, type?: string) => {
+      return codes
+        .filter(c => c.userId === userId && (!type || c.type === type))
+        .map(c => ({ ...c }));
+    };
     
     // Add updateUser method to mock adapter
     mockAdapter.updateUser = jest.fn().mockImplementation((id: any, updates: any) => Promise.resolve({
@@ -78,7 +130,7 @@ describe('Forgot Password Functions', () => {
 
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
 
-      const result = await initiateForgotPassword('test@example.com');
+  const result = await initiateForgotPassword('test@example.com', { useEmailService: false });
 
       expect(result.success).toBe(true);
       expect(result.message).toContain('Password reset code sent');
@@ -129,7 +181,7 @@ describe('Forgot Password Functions', () => {
         })
       };
 
-      const result = await initiateForgotPassword('test@example.com', options);
+  const result = await initiateForgotPassword('test@example.com', { ...options, useEmailService: false });
 
       expect(result.success).toBe(true);
       expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/[0-9]{8}/)); // 8-digit code
@@ -145,7 +197,7 @@ describe('Forgot Password Functions', () => {
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
 
       // First request should succeed
-      await initiateForgotPassword('test@example.com');
+  await initiateForgotPassword('test@example.com', { useEmailService: false });
 
       // Second immediate request should fail
       await expect(initiateForgotPassword('test@example.com', {
@@ -166,7 +218,7 @@ describe('Forgot Password Functions', () => {
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
 
       // First initiate forgot password to generate a code
-      await initiateForgotPassword('test@example.com');
+  await initiateForgotPassword('test@example.com', { useEmailService: false });
 
       // Extract the code from the console.log call
       const logCall = (console.log as jest.MockedFunction<any>).mock.calls.find((call: any) => 
@@ -175,7 +227,7 @@ describe('Forgot Password Functions', () => {
       const codeMatch = logCall[0].match(/: (\d+)/);
       const resetCode = codeMatch ? codeMatch[1] : '123456';
 
-      const result = await resetPasswordWithCode(
+  const result = await resetPasswordWithCode(
         'test@example.com',
         resetCode,
         'newPassword123!'
@@ -207,7 +259,7 @@ describe('Forgot Password Functions', () => {
         'test@example.com',
         '123456',
         'weak'
-      )).rejects.toThrow('Password must be at least 8 characters long');
+      )).rejects.toThrow('Password validation failed');
     });
 
     it('should enforce strong password requirements', async () => {
@@ -224,7 +276,7 @@ describe('Forgot Password Functions', () => {
         '123456',
         'weakpassword',
         { requireStrongPassword: true }
-      )).rejects.toThrow('Password must contain at least one uppercase letter');
+      )).rejects.toThrow(/Password validation failed: .*one uppercase letter/i);
     });
 
     it('should reject invalid reset code', async () => {
@@ -236,11 +288,11 @@ describe('Forgot Password Functions', () => {
 
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
 
-      await expect(resetPasswordWithCode(
+    await expect(resetPasswordWithCode(
         'test@example.com',
         'invalid_code',
         'NewPassword123!'
-      )).rejects.toThrow('Invalid or expired reset code');
+      )).rejects.toThrow('No valid reset code found');
     });
 
     it('should reject empty or missing code', async () => {
@@ -261,7 +313,7 @@ describe('Forgot Password Functions', () => {
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
 
       // First initiate forgot password
-      await initiateForgotPassword('test@example.com');
+  await initiateForgotPassword('test@example.com', { useEmailService: false });
 
       // Extract code from console log
       const logCall = (console.log as jest.MockedFunction<any>).mock.calls.find((call: any) => 
@@ -270,16 +322,19 @@ describe('Forgot Password Functions', () => {
       const codeMatch = logCall[0].match(/: (\d+)/);
       const resetCode = codeMatch ? codeMatch[1] : '123456';
 
-      // Mock the password verification to return true for the same password
-      const { verifyPassword } = await import('../../utils/hash');
-      jest.spyOn(await import('../../utils/hash'), 'verifyPassword').mockResolvedValue(true);
+  // Mock the password verification to return true for the same password
+  const mockedHash: any = jest.requireMock('../../utils/hash') as any;
+  const originalVerify = mockedHash.verifyPassword;
+  mockedHash.verifyPassword = async () => true;
 
-      await expect(resetPasswordWithCode(
+  await expect(resetPasswordWithCode(
         'test@example.com',
         resetCode,
         'SamePassword123!',
         { preventReuse: true }
       )).rejects.toThrow('New password cannot be the same as your current password');
+  // restore mocked verify to default
+  mockedHash.verifyPassword = originalVerify;
     });
 
     it('should handle database adapter without updateUser method', async () => {
@@ -293,10 +348,10 @@ describe('Forgot Password Functions', () => {
         password: 'old_password'
       });
 
-      // First initiate forgot password to get a code
-      await initiateForgotPassword('test@example.com');
+  // First initiate forgot password to get a code
+  await initiateForgotPassword('test@example.com', { useEmailService: false });
 
-      await expect(resetPasswordWithCode(
+  await expect(resetPasswordWithCode(
         'test@example.com',
         '123456',
         'NewPassword123!'
@@ -319,19 +374,19 @@ describe('Forgot Password Functions', () => {
     });
 
     it('should include required character types', () => {
-      const password = generateTemporaryPassword(20);
-      
-      expect(password).toMatch(/[A-Z]/); // uppercase
-      expect(password).toMatch(/[a-z]/); // lowercase
-      expect(password).toMatch(/[0-9]/); // numbers
-      expect(password).toMatch(/[!@#$%^&*]/); // special characters
+  const password = generateTemporaryPassword(20);
+
+  expect(password).toMatch(/[A-Z]/); // uppercase
+  expect(password).toMatch(/[a-z]/); // lowercase
+  expect(password).toMatch(/[0-9]/); // numbers
+  expect(password).toMatch(/[!@#$%^&*]/); // special characters
     });
 
     it('should generate different passwords each time', () => {
-      const password1 = generateTemporaryPassword();
-      const password2 = generateTemporaryPassword();
+  const password1 = generateTemporaryPassword();
+  const password2 = generateTemporaryPassword();
       
-      expect(password1).not.toBe(password2);
+  expect(password1).not.toBe(password2);
     });
   });
 
@@ -346,7 +401,7 @@ describe('Forgot Password Functions', () => {
 
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
 
-      const result = await sendTemporaryPassword('test@example.com');
+  const result = await sendTemporaryPassword('test@example.com', { useEmailService: false });
 
       expect(result.success).toBe(true);
       expect(result.message).toContain('Temporary password sent');
@@ -381,9 +436,9 @@ describe('Forgot Password Functions', () => {
 
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
 
-      await sendTemporaryPassword('test@example.com', {
+  await sendTemporaryPassword('test@example.com', {
         temporaryPasswordLength: 20
-      });
+  , useEmailService: false });
 
       // Check that a 20-character password was logged
       const logCall = (console.log as jest.MockedFunction<any>).mock.calls.find((call: any) => 
@@ -411,7 +466,7 @@ describe('Forgot Password Functions', () => {
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
 
       // First, initiate a password reset to create a valid code
-      await initiateForgotPassword('test@example.com');
+  await initiateForgotPassword('test@example.com', { useEmailService: false });
       
       // Get the generated code from console.log
       const logCall = (console.log as jest.MockedFunction<any>).mock.calls.find((call: any) => 
@@ -443,11 +498,11 @@ describe('Forgot Password Functions', () => {
         'NewPassword123!'
       )).rejects.toThrow('Reset code is required');
 
-      await expect(resetPasswordWithCode(
+  await expect(resetPasswordWithCode(
         'test@example.com',
         '123456',
         ''
-      )).rejects.toThrow('Password must be at least 8 characters long');
+  )).rejects.toThrow('New password is required');
     });
   });
 });

@@ -475,6 +475,7 @@ describe('PostgreSQL Adapter', () => {
 
   describe('findUserByUsername', () => {
     it('should find user by username successfully', async () => {
+  delete process.env.AUTH_USER_TABLE;
       const mockUser = {
         id: '123',
         email: 'test@example.com',
@@ -507,8 +508,10 @@ describe('PostgreSQL Adapter', () => {
         twoFactorEnabled: false,
       });
 
+      // Determine expected table name based on env
+      const table = process.env.AUTH_USER_TABLE || 'auth_users';
       expect(mockPool.query).toHaveBeenCalledWith(
-        'SELECT * FROM auth_users WHERE LOWER(username) = $1 LIMIT 1',
+        `SELECT * FROM ${table} WHERE LOWER(username) = $1 LIMIT 1`,
         ['testuser']
       );
     });
@@ -543,8 +546,9 @@ describe('PostgreSQL Adapter', () => {
 
       await postgresqlAdapter.findUserByUsername('TestUser');
 
+      const table = process.env.AUTH_USER_TABLE || 'auth_users';
       expect(mockPool.query).toHaveBeenCalledWith(
-        'SELECT * FROM auth_users WHERE LOWER(username) = $1 LIMIT 1',
+        `SELECT * FROM ${table} WHERE LOWER(username) = $1 LIMIT 1`,
         ['testuser']
       );
     });

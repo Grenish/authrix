@@ -14,7 +14,8 @@ export {
   createAuthSuccess
 } from "./frameworks/universal";
 
-export type { AuthResult, LogoutResult, CookieOptions } from "./frameworks/universal";
+export type { AuthResult, CookieOptions, UniversalLogoutResult } from "./frameworks/universal";
+export type { LogoutResult } from "./core/logout";
 
 // Re-export config functions to ensure proper sharing
 export { initAuth, authConfig, isAuthrixInitialized, getAuthrixStatus } from "./config/index";

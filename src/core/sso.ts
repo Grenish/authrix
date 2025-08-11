@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import { authConfig } from "../config";
 import { createToken } from "../tokens/createToken";
 import { generateSecurePassword } from "../utils/hash";
@@ -9,6 +9,7 @@ export interface SSOUser {
   name?: string;
   firstName?: string;
   lastName?: string;
+  fullName?: string;
   avatar?: string;
   provider: string;
   verified?: boolean;
@@ -31,6 +32,8 @@ export interface SSOResult {
     username?: string;
     firstName?: string;
     lastName?: string;
+  fullName?: string;
+  profilePicture?: string;
   };
   token: string;
   cookieOptions: {
@@ -52,7 +55,7 @@ export async function processSSOAuthentication(
   options: SSOOptions = {}
 ): Promise<SSOResult> {
   const db = authConfig.db;
-  
+
   if (!db) {
     throw new Error("Database not configured. Make sure initAuth() is called before using SSO functions.");
   }
@@ -79,7 +82,7 @@ export async function processSSOAuthentication(
   }
 
   const normalizedEmail = ssoUser.email.toLowerCase().trim();
-  
+
   // Check if user already exists
   let existingUser = await db.findUserByEmail(normalizedEmail);
   let isNewUser = false;
@@ -88,7 +91,7 @@ export async function processSSOAuthentication(
     // User exists - update if allowed
     if (updateExistingUser && mergeUserData) {
       const updateData: any = {};
-      
+
       // Apply custom mapping if provided
       if (customUserMapping) {
         Object.assign(updateData, customUserMapping(ssoUser));
@@ -101,13 +104,21 @@ export async function processSSOAuthentication(
             updateData.lastName = nameParts.slice(1).join(' ');
           }
         }
-        
+
         if (ssoUser.firstName && !existingUser.firstName) {
           updateData.firstName = ssoUser.firstName;
         }
-        
+
         if (ssoUser.lastName && !existingUser.lastName) {
           updateData.lastName = ssoUser.lastName;
+        }
+
+        if (ssoUser.fullName && !existingUser.fullName) {
+          updateData.fullName = ssoUser.fullName;
+        }
+
+        if (ssoUser.avatar && !existingUser.profilePicture) {
+          updateData.profilePicture = ssoUser.avatar;
         }
 
         // Generate username from email if not exists and provider supports it
@@ -171,6 +182,14 @@ export async function processSSOAuthentication(
         userData.lastName = ssoUser.lastName;
       }
 
+      if (ssoUser.fullName) {
+        userData.fullName = ssoUser.fullName;
+      }
+
+      if (ssoUser.avatar) {
+        userData.profilePicture = ssoUser.avatar;
+      }
+
       // Generate username from email
       if (ssoUser.email) {
         const emailUsername = ssoUser.email.split('@')[0];
@@ -225,7 +244,9 @@ export async function processSSOAuthentication(
       email: existingUser.email, // Use the email from the user record, not the normalized one
       username: existingUser.username,
       firstName: existingUser.firstName,
-      lastName: existingUser.lastName,
+  lastName: existingUser.lastName,
+  fullName: existingUser.fullName,
+  profilePicture: existingUser.profilePicture,
     },
     token,
     cookieOptions: {
@@ -251,7 +272,7 @@ export async function handleGoogleSSO(
     // Dynamic import to avoid requiring OAuth dependencies
     const { handleGoogleCallback } = await import('../providers/google');
     const googleUser = await handleGoogleCallback(code);
-    
+
     const ssoUser: SSOUser = {
       id: googleUser.id,
       email: googleUser.email,
@@ -278,7 +299,7 @@ export async function handleGitHubSSO(
     // Dynamic import to avoid requiring OAuth dependencies
     const { handleGitHubCallback } = await import('../providers/github');
     const githubUser = await handleGitHubCallback(code);
-    
+
     const ssoUser: SSOUser = {
       id: githubUser.id,
       email: githubUser.email,
@@ -294,6 +315,138 @@ export async function handleGitHubSSO(
   }
 }
 
+/**
+ * Handle Apple OAuth authentication
+ */
+export async function handleAppleSSO(
+  code: string,
+  options: SSOOptions = {}
+): Promise<SSOResult> {
+  try {
+    const { handleAppleCallback } = await import('../providers/apple');
+    const appleUser = await handleAppleCallback(code);
+
+    const ssoUser: SSOUser = {
+      id: appleUser.id,
+      email: appleUser.email || '',
+      name: appleUser.name,
+      provider: 'apple',
+      verified: appleUser.emailVerified,
+    };
+
+    return processSSOAuthentication(ssoUser, options);
+  } catch (error) {
+    throw new Error(`Apple SSO failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+// This is a new update for this patch: that includes the following updates
+// Newer OAuth: Discord, X, Facebook, LinkedIn, CustomOAuth, And adding more soon in the future.
+
+/**
+ * Handle Discord OAuth authentication
+ */
+export async function handleDiscordSSO(
+  code: string,
+  options: SSOOptions = {}
+): Promise<SSOResult> {
+  try {
+    const { handleDiscordCallback } = await import('../providers/discord');
+    const discordUser = await handleDiscordCallback(code);
+
+    const ssoUser: SSOUser = {
+      id: discordUser.id,
+      email: discordUser.email || '',
+      name: discordUser.displayName || discordUser.username,
+      avatar: discordUser.avatar,
+      provider: 'discord',
+      verified: discordUser.emailVerified,
+    };
+
+    return processSSOAuthentication(ssoUser, options);
+  } catch (error) {
+    throw new Error(`Discord SSO failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+/**
+ * Handle Facebook OAuth authentication
+ */
+export async function handleFacebookSSO(
+  code: string,
+  options: SSOOptions = {}
+): Promise<SSOResult> {
+  try {
+    const { handleFacebookCallback } = await import('../providers/facebook');
+    const fbUser = await handleFacebookCallback(code);
+
+    const ssoUser: SSOUser = {
+      id: fbUser.id,
+      email: fbUser.email || '',
+      name: fbUser.name,
+      avatar: fbUser.avatar,
+      provider: 'facebook',
+      verified: fbUser.emailVerified,
+    };
+
+    return processSSOAuthentication(ssoUser, options);
+  } catch (error) {
+    throw new Error(`Facebook SSO failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+/**
+ * Handle LinkedIn OAuth authentication
+ */
+export async function handleLinkedInSSO(
+  code: string,
+  options: SSOOptions = {}
+): Promise<SSOResult> {
+  try {
+    const { handleLinkedInCallback } = await import('../providers/linkedin');
+    const liUser = await handleLinkedInCallback(code);
+
+    const ssoUser: SSOUser = {
+      id: liUser.id,
+      email: liUser.email,
+      name: liUser.name,
+      avatar: liUser.avatar,
+      provider: 'linkedin',
+      verified: liUser.emailVerified,
+    };
+
+    return processSSOAuthentication(ssoUser, options);
+  } catch (error) {
+    throw new Error(`LinkedIn SSO failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+/**
+ * Handle X/Twitter OAuth authentication
+ */
+export async function handleXSSO(
+  code: string,
+  state: string,
+  options: SSOOptions = {}
+): Promise<SSOResult> {
+  try {
+    const { handleXCallback } = await import('../providers/x');
+    const xUser = await handleXCallback(code, state);
+
+    const ssoUser: SSOUser = {
+      id: xUser.id,
+      email: xUser.email || '',
+      name: xUser.name,
+      avatar: xUser.avatar,
+      provider: 'x',
+      verified: xUser.emailVerified,
+    };
+
+    return processSSOAuthentication(ssoUser, options);
+  } catch (error) {
+    throw new Error(`X SSO failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
 /**
  * Generic SSO handler for custom providers
  */
@@ -329,7 +482,7 @@ export function generateSSOState(data?: any): string {
 export function verifySSOState(state: string, maxAge: number = 300000): any {
   try {
     const stateData = JSON.parse(Buffer.from(state, 'base64url').toString());
-    
+
     if (!stateData.timestamp || !stateData.nonce) {
       throw new Error('Invalid state format');
     }

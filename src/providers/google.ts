@@ -77,8 +77,8 @@ function getGoogleOAuthConfig(): GoogleOAuthConfig {
 
     throw new Error(
       `Missing Google OAuth environment variables: ${missing.join(", ")}. ` +
-        `These are required when using Google OAuth functionality. ` +
-        `Visit https://console.cloud.google.com/apis/credentials to obtain these values.`
+      `These are required when using Google OAuth functionality. ` +
+      `Visit https://console.cloud.google.com/apis/credentials to obtain these values.`
     );
   }
 

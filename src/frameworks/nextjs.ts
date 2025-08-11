@@ -1,4 +1,4 @@
-// Next.js utilities for Authrix - Optimized and bug-fixed version
+// Next.js utilities for Authrix - Refactored and optimized version
 
 import { signupCore } from "../core/signup";
 import { signinCore } from "../core/signin";
@@ -22,6 +22,14 @@ interface EnvironmentInfo {
   hasAppRouterSupport: boolean;
   hasPagesRouterSupport: boolean;
   hasMiddlewareSupport: boolean;
+  detectionComplete: boolean;
+  runtimeInfo: {
+    hasRequire: boolean;
+    hasProcess: boolean;
+    hasGlobalThis: boolean;
+    hasNextData: boolean;
+    nextRuntime?: string;
+  };
 }
 
 // Module cache for better performance
@@ -33,13 +41,29 @@ class ModuleLoader {
     context: 'unknown',
     hasAppRouterSupport: false,
     hasPagesRouterSupport: false,
-    hasMiddlewareSupport: false
+    hasMiddlewareSupport: false,
+    detectionComplete: false,
+    runtimeInfo: {
+      hasRequire: false,
+      hasProcess: false,
+      hasGlobalThis: false,
+      hasNextData: false,
+    }
   };
 
   static async loadModules(): Promise<NextJsModules> {
     if (this.detectionComplete) {
       return this.cache;
     }
+
+    // Update runtime info
+    this.environmentInfo.runtimeInfo = {
+      hasRequire: typeof require !== 'undefined',
+      hasProcess: typeof process !== 'undefined',
+      hasGlobalThis: typeof globalThis !== 'undefined',
+      hasNextData: typeof (globalThis as any).__NEXT_DATA__ !== 'undefined',
+      nextRuntime: typeof process !== 'undefined' ? process.env?.NEXT_RUNTIME : undefined,
+    };
 
     try {
       // Check if we're in a Node.js environment
@@ -50,6 +74,7 @@ class ModuleLoader {
           this.cache.NextRequest = nextServer.NextRequest;
           this.cache.NextResponse = nextServer.NextResponse;
           this.environmentInfo.hasMiddlewareSupport = true;
+          this.environmentInfo.isNextJsAvailable = true;
         } catch {}
 
         try {
@@ -57,9 +82,10 @@ class ModuleLoader {
           this.cache.cookies = nextHeaders.cookies;
           this.cache.headers = nextHeaders.headers;
           this.environmentInfo.hasAppRouterSupport = true;
+          this.environmentInfo.isNextJsAvailable = true;
         } catch {}
 
-        // Check environment
+        // Check environment context
         if (this.cache.cookies) {
           this.environmentInfo.context = 'app-router';
         } else if (this.cache.NextRequest && this.cache.NextResponse) {
@@ -68,14 +94,13 @@ class ModuleLoader {
           this.environmentInfo.context = 'pages-router';
           this.environmentInfo.hasPagesRouterSupport = true;
         }
-
-        this.environmentInfo.isNextJsAvailable = true;
       }
     } catch (error) {
       console.debug('Next.js module loading failed:', error);
     }
 
     this.detectionComplete = true;
+    this.environmentInfo.detectionComplete = true;
     return this.cache;
   }
 
@@ -83,7 +108,7 @@ class ModuleLoader {
     return { ...this.environmentInfo };
   }
 
-  static reset(): void {
+  static reset(): EnvironmentInfo {
     this.cache = {};
     this.detectionComplete = false;
     this.environmentInfo = {
@@ -91,8 +116,20 @@ class ModuleLoader {
       context: 'unknown',
       hasAppRouterSupport: false,
       hasPagesRouterSupport: false,
-      hasMiddlewareSupport: false
+      hasMiddlewareSupport: false,
+      detectionComplete: false,
+      runtimeInfo: {
+        hasRequire: typeof require !== 'undefined',
+        hasProcess: typeof process !== 'undefined',
+        hasGlobalThis: typeof globalThis !== 'undefined',
+        hasNextData: typeof (globalThis as any).__NEXT_DATA__ !== 'undefined',
+        nextRuntime: typeof process !== 'undefined' ? process.env?.NEXT_RUNTIME : undefined,
+      }
     };
+    
+    // Re-run detection
+    this.loadModules();
+    return this.getEnvironmentInfo();
   }
 }
 
@@ -237,7 +274,11 @@ export async function logoutNextApp() {
     }
     
     const cookieStore = modules.cookies();
-    cookieStore.set(CookieUtils.getCookieName(), "", result.cookieOptions);
+    // Use the first cookie to clear (which should be the auth cookie)
+    const cookieToSet = result.cookiesToClear[0];
+    if (cookieToSet) {
+      cookieStore.set(cookieToSet.name, "", cookieToSet.options);
+    }
     return { message: result.message };
   } catch (error) {
     if (error instanceof Error && error.message.includes('Next.js')) {
@@ -475,7 +516,7 @@ export function withAuth<T extends Record<string, any>, U extends Record<string,
   };
 }
 
-// === Flexible Functions ===
+// === Flexible Functions (Auto-detect environment) ===
 
 export async function signupNext(
   email: string,
@@ -547,7 +588,38 @@ export async function signinNext(
   );
 }
 
-export async function getCurrentUser(req?: any) {
+export async function logoutNext(res?: any) {
+  const result = logoutCore();
+  
+  // Try Pages Router if res provided
+  if (res?.setHeader) {
+    const cookie = CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
+    res.setHeader('Set-Cookie', cookie);
+    return { message: result.message };
+  }
+  
+  // Try App Router
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (modules.cookies) {
+      const cookieStore = modules.cookies();
+      // Use the first cookie to clear (which should be the auth cookie)
+      const cookieToSet = result.cookiesToClear[0];
+      if (cookieToSet) {
+        cookieStore.set(cookieToSet.name, "", cookieToSet.options);
+      }
+      return { message: result.message };
+    }
+  } catch {}
+  
+  // Fallback error
+  throw new Error(
+    'Unable to clear authentication cookie. ' +
+    'Pass a response object for Pages Router or call from App Router context.'
+  );
+}
+
+export async function getCurrentUserNext(req?: any) {
   // Try Pages Router if req provided
   if (req?.cookies) {
     const token = req.cookies[CookieUtils.getCookieName()] || null;
@@ -567,7 +639,7 @@ export async function getCurrentUser(req?: any) {
   return null;
 }
 
-export async function isAuthenticated(req?: any): Promise<boolean> {
+export async function isAuthenticatedNext(req?: any): Promise<boolean> {
   // Try Pages Router if req provided
   if (req?.cookies) {
     const token = req.cookies[CookieUtils.getCookieName()] || null;
@@ -587,7 +659,191 @@ export async function isAuthenticated(req?: any): Promise<boolean> {
   return false;
 }
 
-// === Validation Handlers ===
+// === Flexible Functions with explicit naming ===
+
+export async function signupNextFlexible(
+  email: string,
+  password: string,
+  res?: any
+) {
+  return signupNext(email, password, res);
+}
+
+export async function signinNextFlexible(
+  email: string,
+  password: string,
+  res?: any
+) {
+  return signinNext(email, password, res);
+}
+
+export async function getCurrentUserNextFlexible(req?: any) {
+  return getCurrentUserNext(req);
+}
+
+// === API Route Handlers ===
+
+export function createSignupHandler() {
+  return async function handler(request: Request) {
+    if (request.method !== 'POST') {
+      return Response.json(
+        { error: 'Method not allowed' },
+        { status: 405 }
+      );
+    }
+
+    try {
+      const { email, password } = await request.json();
+
+      if (!email || !password) {
+        return Response.json(
+          { error: 'Email and password are required' },
+          { status: 400 }
+        );
+      }
+
+      const result = await signupCore(email, password);
+      
+      const response = Response.json({
+        success: true,
+        user: result.user,
+        message: 'Account created successfully'
+      });
+
+      // Set cookie
+      const cookie = CookieUtils.createCookieString(
+        CookieUtils.getCookieName(),
+        result.token,
+        result.cookieOptions
+      );
+      response.headers.set('Set-Cookie', cookie);
+
+      return response;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Signup failed';
+      const status = message.includes('already registered') ? 409 : 400;
+      
+      return Response.json(
+        { error: message },
+        { status }
+      );
+    }
+  };
+}
+
+export function createSigninHandler() {
+  return async function handler(request: Request) {
+    if (request.method !== 'POST') {
+      return Response.json(
+        { error: 'Method not allowed' },
+        { status: 405 }
+      );
+    }
+
+    try {
+      const { email, password } = await request.json();
+
+      if (!email || !password) {
+        return Response.json(
+          { error: 'Email and password are required' },
+          { status: 400 }
+        );
+      }
+
+      const result = await signinCore(email, password);
+      
+      const response = Response.json({
+        success: true,
+        user: result.user,
+        message: 'Signed in successfully'
+      });
+
+      // Set cookie
+      const cookie = CookieUtils.createCookieString(
+        CookieUtils.getCookieName(),
+        result.token,
+        result.cookieOptions
+      );
+      response.headers.set('Set-Cookie', cookie);
+
+      return response;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Signin failed';
+      
+      return Response.json(
+        { error: message },
+        { status: 401 }
+      );
+    }
+  };
+}
+
+export function createLogoutHandler() {
+  return async function handler(request: Request) {
+    if (request.method !== 'POST') {
+      return Response.json(
+        { error: 'Method not allowed' },
+        { status: 405 }
+      );
+    }
+
+    try {
+      const result = logoutCore();
+      
+      const response = Response.json({
+        success: true,
+        message: result.message
+      });
+
+      // Clear cookie
+      const cookie = CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
+      response.headers.set('Set-Cookie', cookie);
+
+      return response;
+    } catch (error) {
+      return Response.json(
+        { error: 'Logout failed' },
+        { status: 500 }
+      );
+    }
+  };
+}
+
+export function createCurrentUserHandler() {
+  return async function handler(request: Request) {
+    if (request.method !== 'GET') {
+      return Response.json(
+        { error: 'Method not allowed' },
+        { status: 405 }
+      );
+    }
+
+    try {
+      const cookieHeader = request.headers.get('cookie');
+      const cookies = parseCookies(cookieHeader || '');
+      const token = cookies[CookieUtils.getCookieName()];
+      
+      const user = await getCurrentUserFromToken(token);
+      
+      if (!user) {
+        return Response.json(
+          { error: 'Not authenticated' },
+          { status: 401 }
+        );
+      }
+
+      return Response.json({
+        success: true,
+        user
+      });
+    } catch (error) {
+      return Response.json(
+        { error: 'Failed to get current user' },
+        { status: 500 }
+      );
+    }
+  };
+}
 
 export function createTokenValidationHandler() {
   return async function handler(request: Request) {
@@ -616,6 +872,127 @@ export function createTokenValidationHandler() {
         { success: false, error: 'Token validation failed' },
         { status: 500 }
       );
+    }
+  };
+}
+
+// === Pages Router Handlers ===
+
+export function createSignupHandlerPages() {
+  return async function handler(req: any, res: any) {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    try {
+      const { email, password } = req.body;
+
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required' });
+      }
+
+      const result = await signupCore(email, password);
+      
+      // Set cookie
+      const cookie = CookieUtils.createCookieString(
+        CookieUtils.getCookieName(),
+        result.token,
+        result.cookieOptions
+      );
+      res.setHeader('Set-Cookie', cookie);
+
+      return res.json({
+        success: true,
+        user: result.user,
+        message: 'Account created successfully'
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Signup failed';
+      const status = message.includes('already registered') ? 409 : 400;
+      
+      return res.status(status).json({ error: message });
+    }
+  };
+}
+
+export function createSigninHandlerPages() {
+  return async function handler(req: any, res: any) {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    try {
+      const { email, password } = req.body;
+
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required' });
+      }
+
+      const result = await signinCore(email, password);
+      
+      // Set cookie
+      const cookie = CookieUtils.createCookieString(
+        CookieUtils.getCookieName(),
+        result.token,
+        result.cookieOptions
+      );
+      res.setHeader('Set-Cookie', cookie);
+
+      return res.json({
+        success: true,
+        user: result.user,
+        message: 'Signed in successfully'
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Signin failed';
+      return res.status(401).json({ error: message });
+    }
+  };
+}
+
+export function createLogoutHandlerPages() {
+  return async function handler(req: any, res: any) {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    try {
+      const result = logoutCore();
+      
+      // Clear cookie
+      const cookie = CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
+      res.setHeader('Set-Cookie', cookie);
+
+      return res.json({
+        success: true,
+        message: result.message
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Logout failed' });
+    }
+  };
+}
+
+export function createCurrentUserHandlerPages() {
+  return async function handler(req: any, res: any) {
+    if (req.method !== 'GET') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    try {
+      const token = req.cookies[CookieUtils.getCookieName()];
+      const user = await getCurrentUserFromToken(token);
+      
+      if (!user) {
+        return res.status(401).json({ error: 'Not authenticated' });
+      }
+
+      return res.json({
+        success: true,
+        user
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Failed to get current user' });
     }
   };
 }
@@ -655,26 +1032,43 @@ export function createTokenValidationHandlerPages() {
   };
 }
 
+// === Helper Functions ===
+
+function parseCookies(cookieHeader: string): Record<string, string> {
+  const cookies: Record<string, string> = {};
+  
+  if (!cookieHeader) return cookies;
+  
+  cookieHeader.split(';').forEach(cookie => {
+    const [name, ...rest] = cookie.trim().split('=');
+    if (name && rest.length > 0) {
+      cookies[name] = rest.join('=');
+    }
+  });
+  
+  return cookies;
+}
+
 // === Environment Info ===
 
-export function getNextJsEnvironmentInfo(): EnvironmentInfo & {
-  detectionComplete: boolean;
-  runtimeInfo: Record<string, any>;
-} {
-  const info = ModuleLoader.getEnvironmentInfo();
-  return {
-    ...info,
-    detectionComplete: true,
-    runtimeInfo: {
-      hasRequire: typeof require !== 'undefined',
-      hasProcess: typeof process !== 'undefined',
-      nextRuntime: typeof process !== 'undefined' ? process.env?.NEXT_RUNTIME : undefined
-    }
-  };
+export function getNextJsEnvironmentInfo(): EnvironmentInfo {
+  // Ensure modules are loaded before returning info
+  ModuleLoader.loadModules();
+  return ModuleLoader.getEnvironmentInfo();
+}
+
+export function redetectNextJsEnvironment(): EnvironmentInfo {
+  return ModuleLoader.reset();
 }
 
 export function resetEnvironmentDetection(): void {
   ModuleLoader.reset();
+}
+
+export function forceNextJsAvailability(available: boolean = true): void {
+  // For testing purposes - force Next.js availability
+  const info = ModuleLoader.getEnvironmentInfo();
+  info.isNextJsAvailable = available;
 }
 
 // === Cookie Helpers ===
@@ -699,4 +1093,39 @@ export function createAuthCookieString(
 
 export function createLogoutCookieString(): string {
   return CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
+}
+
+// === Response Creation Helpers ===
+
+export function createAuthenticatedResponse(
+  data: any,
+  token?: string,
+  options?: {
+    status?: number;
+    headers?: Record<string, string>;
+    cookieOptions?: any;
+  }
+) {
+  const response = Response.json(data, {
+    status: options?.status || 200,
+    headers: options?.headers
+  });
+
+  if (token) {
+    const cookie = CookieUtils.createCookieString(
+      CookieUtils.getCookieName(),
+      token,
+      {
+        httpOnly: true,
+        path: '/',
+        maxAge: 604800, // 7 days
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        ...options?.cookieOptions
+      }
+    );
+    response.headers.set('Set-Cookie', cookie);
+  }
+
+  return response;
 }

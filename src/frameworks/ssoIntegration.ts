@@ -5,6 +5,11 @@
 import {
   handleGoogleSSO,
   handleGitHubSSO,
+  handleAppleSSO,
+  handleDiscordSSO,
+  handleFacebookSSO,
+  handleLinkedInSSO,
+  handleXSSO,
   generateSSOState,
   verifySSOState,
   SSOOptions
@@ -16,14 +21,14 @@ import {
   ResetPasswordOptions
 } from "../core/forgotPassword";
 
-// Import all OAuth providers
-import { getGoogleOAuthURL, handleGoogleCallback } from "../providers/google";
-import { getGitHubOAuthURL, handleGitHubCallback } from "../providers/github";
-import { getAppleOAuthURL, handleAppleCallback } from "../providers/apple";
-import { getDiscordOAuthURL, handleDiscordCallback } from "../providers/discord";
-import { getFacebookOAuthURL, handleFacebookCallback } from "../providers/facebook";
-import { getLinkedInOAuthURL, handleLinkedInCallback } from "../providers/linkedin";
-import { getXOAuthURL, handleXCallback } from "../providers/x";
+// Import only OAuth URL builders (callbacks handled via core SSO wrappers)
+import { getGoogleOAuthURL } from "../providers/google";
+import { getGitHubOAuthURL } from "../providers/github";
+import { getAppleOAuthURL } from "../providers/apple";
+import { getDiscordOAuthURL } from "../providers/discord";
+import { getFacebookOAuthURL } from "../providers/facebook";
+import { getLinkedInOAuthURL } from "../providers/linkedin";
+import { getXOAuthURL } from "../providers/x";
 
 // Type definitions for Next.js (optional dependency)
 interface NextRequest {
@@ -155,19 +160,12 @@ export const nextSSO = {
       // Verify state
       const stateData = verifySSOState(state);
 
-      // Handle Google OAuth using provider callback
-      const result = await handleGoogleCallback(code, { includeTokens: true });
+  // Use core SSO handler (creates/updates user + JWT)
+  const ssoResult = await handleGoogleSSO(code, options);
 
-      // Set auth cookie
-      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-      response.cookies.set('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-
-      return response;
+  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -219,19 +217,10 @@ export const nextSSO = {
       // Verify state
       const stateData = verifySSOState(state);
 
-      // Handle GitHub OAuth using provider callback
-      const result = await handleGitHubCallback(code, { includeToken: true });
-
-      // Set auth cookie
-      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-      response.cookies.set('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-
-      return response;
+  const ssoResult = await handleGitHubSSO(code, options);
+  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -285,23 +274,10 @@ export const nextSSO = {
       // Verify state
       const stateData = verifySSOState(state);
 
-      // Handle Apple OAuth using provider callback
-      const result = await handleAppleCallback(code, {
-        idToken: idToken || undefined,
-        user: user || undefined,
-        state
-      });
-
-      // Set auth cookie
-      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-      response.cookies.set('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-
-      return response;
+  const ssoResult = await handleAppleSSO(code, options);
+  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -353,22 +329,10 @@ export const nextSSO = {
       // Verify state
       const stateData = verifySSOState(state);
 
-      // Handle Discord OAuth using provider callback
-      const result = await handleDiscordCallback(code, {
-        state,
-        includeTokens: true
-      });
-
-      // Set auth cookie
-      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-      response.cookies.set('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-
-      return response;
+  const ssoResult = await handleDiscordSSO(code, options);
+  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -420,22 +384,10 @@ export const nextSSO = {
       // Verify state
       const stateData = verifySSOState(state);
 
-      // Handle Facebook OAuth using provider callback
-      const result = await handleFacebookCallback(code, {
-        state,
-        includeTokens: true
-      });
-
-      // Set auth cookie
-      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-      response.cookies.set('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-
-      return response;
+  const ssoResult = await handleFacebookSSO(code, options);
+  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -487,22 +439,10 @@ export const nextSSO = {
       // Verify state
       const stateData = verifySSOState(state);
 
-      // Handle LinkedIn OAuth using provider callback
-      const result = await handleLinkedInCallback(code, {
-        state,
-        includeTokens: true
-      });
-
-      // Set auth cookie
-      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-      response.cookies.set('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-
-      return response;
+  const ssoResult = await handleLinkedInSSO(code, options);
+  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -554,21 +494,10 @@ export const nextSSO = {
       // Verify state
       const stateData = verifySSOState(state);
 
-      // Handle X OAuth using provider callback
-      const result = await handleXCallback(code, state, {
-        includeToken: true
-      });
-
-      // Set auth cookie
-      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-      response.cookies.set('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-
-      return response;
+  const ssoResult = await handleXSSO(code, state, options);
+  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -678,17 +607,9 @@ export const expressSSO = {
       // Verify state
       const stateData = verifySSOState(state as string);
 
-      // Handle Google OAuth using provider callback
-      const result = await handleGoogleCallback(code as string, { includeTokens: true });
-
-      // Set auth cookie
-      res.cookie('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-      res.redirect(stateData.redirect || '/dashboard');
+  const ssoResult = await handleGoogleSSO(code as string, options);
+  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
@@ -732,17 +653,9 @@ export const expressSSO = {
       // Verify state
       const stateData = verifySSOState(state as string);
 
-      // Handle GitHub OAuth using provider callback
-      const result = await handleGitHubCallback(code as string, { includeToken: true });
-
-      // Set auth cookie
-      res.cookie('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-      res.redirect(stateData.redirect || '/dashboard');
+  const ssoResult = await handleGitHubSSO(code as string, options);
+  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
@@ -786,21 +699,9 @@ export const expressSSO = {
       // Verify state
       const stateData = verifySSOState(state as string);
 
-      // Handle Apple OAuth using provider callback
-      const result = await handleAppleCallback(code as string, {
-        idToken: id_token,
-        user: user,
-        state: state as string
-      });
-
-      // Set auth cookie
-      res.cookie('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-      res.redirect(stateData.redirect || '/dashboard');
+  const ssoResult = await handleAppleSSO(code as string, options);
+  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
@@ -844,20 +745,9 @@ export const expressSSO = {
       // Verify state
       const stateData = verifySSOState(state as string);
 
-      // Handle Discord OAuth using provider callback
-      const result = await handleDiscordCallback(code as string, {
-        state: state as string,
-        includeTokens: true
-      });
-
-      // Set auth cookie
-      res.cookie('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-      res.redirect(stateData.redirect || '/dashboard');
+  const ssoResult = await handleDiscordSSO(code as string, options);
+  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
@@ -901,20 +791,9 @@ export const expressSSO = {
       // Verify state
       const stateData = verifySSOState(state as string);
 
-      // Handle Facebook OAuth using provider callback
-      const result = await handleFacebookCallback(code as string, {
-        state: state as string,
-        includeTokens: true
-      });
-
-      // Set auth cookie
-      res.cookie('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-      res.redirect(stateData.redirect || '/dashboard');
+  const ssoResult = await handleFacebookSSO(code as string, options);
+  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
@@ -958,20 +837,9 @@ export const expressSSO = {
       // Verify state
       const stateData = verifySSOState(state as string);
 
-      // Handle LinkedIn OAuth using provider callback
-      const result = await handleLinkedInCallback(code as string, {
-        state: state as string,
-        includeTokens: true
-      });
-
-      // Set auth cookie
-      res.cookie('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-      res.redirect(stateData.redirect || '/dashboard');
+  const ssoResult = await handleLinkedInSSO(code as string, options);
+  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
@@ -1015,19 +883,9 @@ export const expressSSO = {
       // Verify state
       const stateData = verifySSOState(state as string);
 
-      // Handle X OAuth using provider callback
-      const result = await handleXCallback(code as string, state as string, {
-        includeToken: true
-      });
-
-      // Set auth cookie
-      res.cookie('auth_token', result.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-      });
-      res.redirect(stateData.redirect || '/dashboard');
+  const ssoResult = await handleXSSO(code as string, state as string, options);
+  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+  res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
@@ -1160,25 +1018,46 @@ export const universalSSO = {
     let result: GenericOAuthUser;
     switch (provider) {
       case 'google':
-        result = await handleGoogleCallback(code, { includeTokens: true, ...options });
+        {
+          const { handleGoogleCallback } = await import('../providers/google');
+          result = await handleGoogleCallback(code, { includeTokens: true, ...options });
+        }
         break;
       case 'github':
-        result = await handleGitHubCallback(code, { includeToken: true, ...options });
+        {
+          const { handleGitHubCallback } = await import('../providers/github');
+          result = await handleGitHubCallback(code, { includeToken: true, ...options });
+        }
         break;
       case 'apple':
-        result = await handleAppleCallback(code, { state, ...options });
+        {
+          const { handleAppleCallback } = await import('../providers/apple');
+          result = await handleAppleCallback(code, { state, ...options });
+        }
         break;
       case 'discord':
-        result = await handleDiscordCallback(code, { state, includeTokens: true, ...options });
+        {
+          const { handleDiscordCallback } = await import('../providers/discord');
+          result = await handleDiscordCallback(code, { state, includeTokens: true, ...options });
+        }
         break;
       case 'facebook':
-        result = await handleFacebookCallback(code, { state, includeTokens: true, ...options });
+        {
+          const { handleFacebookCallback } = await import('../providers/facebook');
+          result = await handleFacebookCallback(code, { state, includeTokens: true, ...options });
+        }
         break;
       case 'linkedin':
-        result = await handleLinkedInCallback(code, { state, includeTokens: true, ...options });
+        {
+          const { handleLinkedInCallback } = await import('../providers/linkedin');
+          result = await handleLinkedInCallback(code, { state, includeTokens: true, ...options });
+        }
         break;
       case 'x':
-        result = await handleXCallback(code, state, { includeToken: true, ...options });
+        {
+          const { handleXCallback } = await import('../providers/x');
+          result = await handleXCallback(code, state, { includeToken: true, ...options });
+        }
         break;
       default:
         throw new Error(`Unsupported provider: ${provider}`);

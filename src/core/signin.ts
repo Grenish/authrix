@@ -1,6 +1,6 @@
 import { authConfig } from "../config";
 import { createToken } from "../tokens/createToken";
-import { verifyPassword } from "../utils/hash";
+import { verifyPassword, verifyAndCheckRehash } from "../utils/hash";
 import { BadRequestError, UnauthorizedError, ForbiddenError } from "../utils/errors";
 import type { Response } from "express";
 
@@ -159,10 +159,23 @@ export async function signinCore(
       throw new UnauthorizedError("Invalid email or password");
     }
 
-    // Verify password
-    const isValidPassword = await verifyPassword(password, user.password, {
-      identifier: normalizedEmail
-    });
+    // Verify password and upgrade hash transparently if needed
+    let isValidPassword = false;
+    let upgradedHash: string | undefined;
+    try {
+      const verifyResult = await verifyAndCheckRehash(password, user.password, {
+        identifier: normalizedEmail,
+        updateHash: !!(authConfig.db && authConfig.db.updateUser)
+      });
+      isValidPassword = verifyResult.valid;
+      if (verifyResult.valid && verifyResult.needsRehash && verifyResult.newHash) {
+        upgradedHash = verifyResult.newHash;
+      }
+    } catch (e) {
+      // Fallback to legacy verify if newer path misbehaves
+      const legacyValid = await verifyPassword(password, user.password, { identifier: normalizedEmail });
+      isValidPassword = legacyValid;
+    }
 
     if (!isValidPassword) {
       throw new UnauthorizedError("Invalid email or password");
@@ -186,14 +199,22 @@ export async function signinCore(
 
     // Update last login timestamp if requested
     let updatedUser = user;
-    if (updateLastLogin && db.updateUser) {
+    if ((updateLastLogin || upgradedHash) && db.updateUser) {
       try {
-        updatedUser = await db.updateUser(user.id, {
-          lastLoginAt: new Date(),
-          loginCount: (user.loginCount || 0) + 1
-        }) || user;
+        const updatePayload: any = {};
+        if (updateLastLogin) {
+          updatePayload.lastLoginAt = new Date();
+          updatePayload.loginCount = (user.loginCount || 0) + 1;
+        }
+        if (upgradedHash) {
+          updatePayload.password = upgradedHash;
+          updatePayload.passwordChangedAt = new Date();
+        }
+        if (Object.keys(updatePayload).length > 0) {
+          updatedUser = await db.updateUser(user.id, updatePayload) || user;
+        }
       } catch (error) {
-        console.warn('[AUTHRIX] Failed to update last login timestamp:', error);
+        console.warn('[AUTHRIX] Failed to post-auth update (login timestamp / hash upgrade):', error);
         // Don't fail the login for this
       }
     }

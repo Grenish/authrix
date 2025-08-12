@@ -1,308 +1,817 @@
 import * as bcrypt from "bcryptjs";
-import { createHash, randomBytes } from "crypto";
+import * as argon2 from "argon2";
+import { createHash, randomBytes, timingSafeEqual } from "crypto";
+import { promisify } from "util";
+import { Worker } from "worker_threads";
 
-const BCRYPT_ROUNDS = 14; // Increased from 12 for better security
-const MIN_PASSWORD_LENGTH = 8;
-const MAX_PASSWORD_LENGTH = 128; // Prevent DoS attacks
+// ============================= Types & Interfaces =============================
 
-// Rate limiting for password operations (simple in-memory store)
-const passwordOperationTimes = new Map<string, number[]>();
-const MAX_OPERATIONS_PER_MINUTE = 10;
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+interface PasswordValidationResult {
+  isValid: boolean;
+  errors: string[];
+  strength: number; // 0-100
+  entropy: number;
+}
 
-/**
- * Enhanced password validation with comprehensive security checks
- */
-export function validatePassword(password: string): { isValid: boolean; errors: string[] } {
+interface HashOptions {
+  skipValidation?: boolean;
+  identifier?: string;
+  algorithm?: "bcrypt" | "argon2id";
+  pepper?: string;
+}
+
+interface VerifyOptions {
+  identifier?: string;
+  updateHash?: boolean;
+}
+
+interface PasswordPolicy {
+  minLength: number;
+  maxLength: number;
+  requireLowercase: boolean;
+  requireUppercase: boolean;
+  requireNumbers: boolean;
+  requireSymbols: boolean;
+  minEntropy: number;
+  preventCommonPasswords: boolean;
+  preventUserInfo: boolean;
+}
+
+interface RateLimitEntry {
+  attempts: number[];
+  blocked: boolean;
+  blockUntil?: number;
+}
+
+// ============================= Configuration =============================
+
+class SecurityConfig {
+  // Bcrypt configuration
+  public readonly BCRYPT_ROUNDS: number;
+
+  // Argon2 configuration
+  public readonly ARGON2_TIME_COST = 3;
+  public readonly ARGON2_MEMORY_COST = 65536; // 64MB
+  public readonly ARGON2_PARALLELISM = 4;
+
+  // Password constraints
+  public readonly MIN_PASSWORD_LENGTH = 12; // Increased from 8
+  public readonly MAX_PASSWORD_LENGTH = 256; // Increased from 128
+  public readonly MIN_ENTROPY = 50; // Minimum entropy bits
+
+  // Rate limiting
+  public readonly MAX_ATTEMPTS_PER_MINUTE = 5; // Reduced from 10
+  public readonly MAX_ATTEMPTS_PER_HOUR = 20;
+  public readonly BLOCK_DURATION = 15 * 60 * 1000; // 15 minutes
+  public readonly RATE_LIMIT_WINDOW = 60 * 1000;
+
+  // Security pepper (should be stored securely, e.g., in environment variable or secret manager)
+  private readonly PEPPER: string;
+
+  constructor() {
+    // Parse bcrypt rounds with stricter validation
+    const envRounds = parseInt(process.env.AUTHRIX_BCRYPT_ROUNDS || "", 10);
+    this.BCRYPT_ROUNDS = this.validateBcryptRounds(envRounds);
+
+    // Load pepper from secure storage
+    this.PEPPER =
+      process.env.AUTHRIX_PASSWORD_PEPPER || this.generateDefaultPepper();
+
+    // Validate configuration on startup
+    this.validateConfiguration();
+  }
+
+  private validateBcryptRounds(rounds: number): number {
+    if (!isNaN(rounds) && rounds >= 12 && rounds <= 20) {
+      return rounds;
+    }
+    return 14; // Secure default
+  }
+
+  private generateDefaultPepper(): string {
+    // In production, this should be loaded from secure storage
+    console.warn(
+      "⚠️ Using generated pepper. Configure AUTHRIX_PASSWORD_PEPPER in production!"
+    );
+    return randomBytes(32).toString("hex");
+  }
+
+  private validateConfiguration(): void {
+    if (this.BCRYPT_ROUNDS < 12) {
+      throw new Error(
+        "Bcrypt rounds must be at least 12 for production security"
+      );
+    }
+    if (!this.PEPPER || this.PEPPER.length < 32) {
+      throw new Error("Password pepper must be at least 32 characters");
+    }
+  }
+
+  public getPepper(): string {
+    return this.PEPPER;
+  }
+}
+
+const config = new SecurityConfig();
+
+// ============================= Rate Limiting =============================
+
+class RateLimiter {
+  private store = new Map<string, RateLimitEntry>();
+  private cleanupInterval: NodeJS.Timeout;
+
+  constructor() {
+    // Periodic cleanup every 5 minutes
+    this.cleanupInterval = setInterval(() => this.cleanup(), 5 * 60 * 1000);
+  }
+
+  public checkLimit(identifier: string): {
+    allowed: boolean;
+    retryAfter?: number;
+  } {
+    const now = Date.now();
+    const entry = this.store.get(identifier) || {
+      attempts: [],
+      blocked: false,
+    };
+
+    // Check if currently blocked
+    if (entry.blocked && entry.blockUntil && entry.blockUntil > now) {
+      return {
+        allowed: false,
+        retryAfter: Math.ceil((entry.blockUntil - now) / 1000),
+      };
+    }
+
+    // Reset block if expired
+    if (entry.blocked && entry.blockUntil && entry.blockUntil <= now) {
+      entry.blocked = false;
+      entry.blockUntil = undefined;
+      entry.attempts = [];
+    }
+
+    // Filter recent attempts
+    entry.attempts = entry.attempts.filter(
+      (time) => now - time < config.RATE_LIMIT_WINDOW
+    );
+
+    // Check rate limits
+    if (entry.attempts.length >= config.MAX_ATTEMPTS_PER_MINUTE) {
+      // Block the identifier
+      entry.blocked = true;
+      entry.blockUntil = now + config.BLOCK_DURATION;
+      this.store.set(identifier, entry);
+
+      return {
+        allowed: false,
+        retryAfter: Math.ceil(config.BLOCK_DURATION / 1000),
+      };
+    }
+
+    // Add current attempt
+    entry.attempts.push(now);
+    this.store.set(identifier, entry);
+
+    return { allowed: true };
+  }
+
+  private cleanup(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.store.entries()) {
+      // Remove entries with no recent activity
+      const hasRecentActivity = entry.attempts.some(
+        (time) => now - time < config.RATE_LIMIT_WINDOW * 2
+      );
+      const isBlocked =
+        entry.blocked && entry.blockUntil && entry.blockUntil > now;
+
+      if (!hasRecentActivity && !isBlocked) {
+        this.store.delete(key);
+      }
+    }
+
+    // Prevent memory leak
+    if (this.store.size > 10000) {
+      const entries = Array.from(this.store.entries());
+      entries.sort((a, b) => {
+        const aLast = Math.max(...a[1].attempts, 0);
+        const bLast = Math.max(...b[1].attempts, 0);
+        return aLast - bLast;
+      });
+
+      // Keep only the most recent 5000 entries
+      this.store.clear();
+      entries
+        .slice(-5000)
+        .forEach(([key, value]) => this.store.set(key, value));
+    }
+  }
+
+  public destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+  }
+}
+
+const rateLimiter = new RateLimiter();
+
+// ============================= Password Validation =============================
+
+class PasswordValidator {
+  private static readonly COMMON_PASSWORDS = new Set([
+    "password",
+    "123456",
+    "password123",
+    "admin",
+    "letmein",
+    "welcome",
+    "monkey",
+    "1234567890",
+    "qwerty",
+    "abc123",
+    "Password1",
+    "password1",
+  ]);
+
+  private static readonly KEYBOARD_PATTERNS = [
+    /qwerty/i,
+    /asdfgh/i,
+    /zxcvbn/i,
+    /qwertyuiop/i,
+    /\d{4,}/, // 4+ consecutive digits
+    /(.)\1{3,}/, // 4+ repeated characters
+  ];
+
+  public validate(
+    password: string,
+    policy?: Partial<PasswordPolicy>,
+    userInfo?: string[]
+  ): PasswordValidationResult {
     const errors: string[] = [];
+    const defaultPolicy: PasswordPolicy = {
+      minLength: config.MIN_PASSWORD_LENGTH,
+      maxLength: config.MAX_PASSWORD_LENGTH,
+      requireLowercase: true,
+      requireUppercase: true,
+      requireNumbers: true,
+      requireSymbols: true,
+      minEntropy: config.MIN_ENTROPY,
+      preventCommonPasswords: true,
+      preventUserInfo: true,
+    };
+
+    const finalPolicy = { ...defaultPolicy, ...policy };
 
     // Length validation
-    if (!password || password.length < MIN_PASSWORD_LENGTH) {
-        errors.push(`Password must be at least ${MIN_PASSWORD_LENGTH} characters long`);
-    }
-    
-    if (password.length > MAX_PASSWORD_LENGTH) {
-        errors.push(`Password must not exceed ${MAX_PASSWORD_LENGTH} characters`);
+    if (!password || password.length < finalPolicy.minLength) {
+      errors.push(
+        `Password must be at least ${finalPolicy.minLength} characters`
+      );
     }
 
-    // Complexity requirements
-    if (!/[a-z]/.test(password)) {
-        errors.push("Password must contain at least one lowercase letter");
-    }
-    
-    if (!/[A-Z]/.test(password)) {
-        errors.push("Password must contain at least one uppercase letter");
-    }
-    
-    if (!/\d/.test(password)) {
-        errors.push("Password must contain at least one number");
-    }
-    
-    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
-        errors.push("Password must contain at least one special character");
+    if (password.length > finalPolicy.maxLength) {
+      errors.push(
+        `Password must not exceed ${finalPolicy.maxLength} characters`
+      );
     }
 
-    // Check for common patterns
-    if (/(.)\1{2,}/.test(password)) {
-        errors.push("Password must not contain more than 2 consecutive identical characters");
+    // Character requirements
+    if (finalPolicy.requireLowercase && !/[a-z]/.test(password)) {
+      errors.push("Password must contain lowercase letters");
     }
 
-    // Check for sequential characters
-    if (/(?:abc|bcd|cde|def|efg|fgh|ghi|hij|ijk|jkl|klm|lmn|mno|nop|opq|pqr|qrs|rst|stu|tuv|uvw|vwx|wxy|xyz|012|123|234|345|456|567|678|789)/i.test(password)) {
-        errors.push("Password must not contain sequential characters");
+    if (finalPolicy.requireUppercase && !/[A-Z]/.test(password)) {
+      errors.push("Password must contain uppercase letters");
     }
+
+    if (finalPolicy.requireNumbers && !/\d/.test(password)) {
+      errors.push("Password must contain numbers");
+    }
+
+    if (
+      finalPolicy.requireSymbols &&
+      !/[!@#$%^&*()_+\-=```math```{};':"\\|,.<>\/?`~]/.test(password)
+    ) {
+      errors.push("Password must contain special characters");
+    }
+
+    // Entropy calculation
+    const entropy = this.calculateEntropy(password);
+    if (entropy < finalPolicy.minEntropy) {
+      errors.push(
+        `Password is too predictable (entropy: ${entropy.toFixed(1)} bits, required: ${finalPolicy.minEntropy})`
+      );
+    }
+
+    // Pattern detection
+    for (const pattern of PasswordValidator.KEYBOARD_PATTERNS) {
+      if (pattern.test(password)) {
+        errors.push("Password contains predictable patterns");
+        break;
+      }
+    }
+
+    // Common password check
+    if (finalPolicy.preventCommonPasswords) {
+      const lowerPassword = password.toLowerCase();
+      if (PasswordValidator.COMMON_PASSWORDS.has(lowerPassword)) {
+        errors.push("Password is too common");
+      }
+    }
+
+    // User info check
+    if (finalPolicy.preventUserInfo && userInfo && userInfo.length > 0) {
+      const lowerPassword = password.toLowerCase();
+      for (const info of userInfo) {
+        if (info && lowerPassword.includes(info.toLowerCase())) {
+          errors.push("Password must not contain personal information");
+          break;
+        }
+      }
+    }
+
+    // Calculate password strength (0-100)
+    const strength = this.calculateStrength(password, entropy, errors.length);
 
     return {
-        isValid: errors.length === 0,
-        errors
+      isValid: errors.length === 0,
+      errors,
+      strength,
+      entropy,
     };
+  }
+
+  private calculateEntropy(password: string): number {
+    const charsets = {
+      lowercase: 26,
+      uppercase: 26,
+      numbers: 10,
+      symbols: 32,
+      extended: 128,
+    };
+
+    let poolSize = 0;
+    if (/[a-z]/.test(password)) poolSize += charsets.lowercase;
+    if (/[A-Z]/.test(password)) poolSize += charsets.uppercase;
+    if (/\d/.test(password)) poolSize += charsets.numbers;
+    if (/[!@#$%^&*()_+\-=```math```{};':"\\|,.<>\/?`~]/.test(password))
+      poolSize += charsets.symbols;
+    if (/[^\x00-\x7F]/.test(password)) poolSize += charsets.extended;
+
+    return password.length * Math.log2(poolSize);
+  }
+
+  private calculateStrength(
+    password: string,
+    entropy: number,
+    errorCount: number
+  ): number {
+    let strength = Math.min(100, (entropy / 100) * 100);
+
+    // Bonus for length
+    if (password.length > 16) strength += 10;
+    if (password.length > 20) strength += 10;
+
+    // Penalty for errors
+    strength -= errorCount * 15;
+
+    // Bonus for character variety
+    const varietyScore = this.getCharacterVariety(password);
+    strength += varietyScore * 5;
+
+    return Math.max(0, Math.min(100, Math.round(strength)));
+  }
+
+  private getCharacterVariety(password: string): number {
+    const types = [
+      /[a-z]/,
+      /[A-Z]/,
+      /\d/,
+      /[!@#$%^&*()_+\-=```math```{};':"\\|,.<>\/?`~]/,
+      /[^\x00-\x7F]/,
+    ];
+
+    return types.filter((regex) => regex.test(password)).length;
+  }
 }
 
-/**
- * Rate limiting for password operations to prevent brute force attacks
- */
-function checkRateLimit(identifier: string): boolean {
-    const now = Date.now();
-    const operations = passwordOperationTimes.get(identifier) || [];
-    
-    // Remove operations older than the rate limit window
-    const recentOperations = operations.filter(time => now - time < RATE_LIMIT_WINDOW);
-    
-    if (recentOperations.length >= MAX_OPERATIONS_PER_MINUTE) {
-        return false; // Rate limit exceeded
-    }
-    
-    // Add current operation
-    recentOperations.push(now);
-    passwordOperationTimes.set(identifier, recentOperations);
-    
-    // Cleanup old entries periodically
-    if (passwordOperationTimes.size > 1000) {
-        for (const [key, times] of Array.from(passwordOperationTimes.entries())) {
-            const validTimes = times.filter(time => now - time < RATE_LIMIT_WINDOW);
-            if (validTimes.length === 0) {
-                passwordOperationTimes.delete(key);
-            } else {
-                passwordOperationTimes.set(key, validTimes);
-            }
-        }
-    }
-    
-    return true;
-}
+const validator = new PasswordValidator();
 
-/**
- * Production-grade password hashing with enhanced security
- * @param password - The plaintext password to hash
- * @param options - Optional configuration
- */
-export async function hashPassword(
-    password: string, 
-    options: { skipValidation?: boolean; identifier?: string } = {}
-): Promise<string> {
+// ============================= Password Hashing =============================
+
+class PasswordHasher {
+  /**
+   * Hash a password using the specified algorithm
+   */
+  public async hash(
+    password: string,
+    options: HashOptions = {}
+  ): Promise<string> {
     // Input validation
-    if (typeof password !== 'string') {
-        throw new Error('Password must be a string');
+    if (typeof password !== "string") {
+      throw new TypeError("Password must be a string");
     }
 
     // Rate limiting
-    if (options.identifier && !checkRateLimit(options.identifier)) {
-        throw new Error('Too many password operations. Please try again later.');
+    if (options.identifier) {
+      const { allowed, retryAfter } = rateLimiter.checkLimit(
+        options.identifier
+      );
+      if (!allowed) {
+        throw new Error(
+          `Rate limit exceeded. Retry after ${retryAfter} seconds`
+        );
+      }
     }
 
-    // Password validation (can be skipped for migration scenarios)
+    // Password validation
     if (!options.skipValidation) {
-        const validation = validatePassword(password);
-        if (!validation.isValid) {
-            throw new Error(`Password validation failed: ${validation.errors.join(', ')}`);
-        }
+      const validation = validator.validate(password);
+      if (!validation.isValid) {
+        throw new Error(`Invalid password: ${validation.errors[0]}`);
+      }
     }
 
-    // Additional security: normalize password to prevent timing attacks
-    const normalizedPassword = Buffer.from(password, 'utf8').toString('utf8');
-    
+    // Apply pepper if configured
+    const pepperedPassword = this.applyPepper(
+      password,
+      options.pepper || config.getPepper()
+    );
+
     try {
-        // Use higher bcrypt rounds for production security
-        const hash = await bcrypt.hash(normalizedPassword, BCRYPT_ROUNDS);
-        
-        // Clear the password from memory (best effort)
-        if (typeof password === 'string') {
-            // Note: This doesn't guarantee memory clearing in JavaScript, but it's good practice
-            password = '';
-        }
-        
-        return hash;
-    } catch (error) {
-        throw new Error(`Failed to hash password: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-}
+      const algorithm = options.algorithm || "argon2id";
 
-/**
- * Production-grade password verification with timing attack protection
- * @param password - The plaintext password to verify
- * @param hashedPassword - The stored hash to compare against
- * @param options - Optional configuration
- */
-export async function verifyPassword(
-    password: string, 
-    hashedPassword: string,
-    options: { identifier?: string } = {}
-): Promise<boolean> {
+      if (algorithm === "argon2id") {
+        return await this.hashWithArgon2(pepperedPassword);
+      } else {
+        return await this.hashWithBcrypt(pepperedPassword);
+      }
+    } finally {
+      // Attempt to clear sensitive data
+      this.clearString(password);
+      this.clearString(pepperedPassword);
+    }
+  }
+
+  /**
+   * Verify a password against a hash
+   */
+  public async verify(
+    password: string,
+    hash: string,
+    options: VerifyOptions = {}
+  ): Promise<{ valid: boolean; needsRehash: boolean }> {
     // Input validation
-    if (typeof password !== 'string' || typeof hashedPassword !== 'string') {
-        throw new Error('Password and hash must be strings');
+    if (typeof password !== "string" || typeof hash !== "string") {
+      return { valid: false, needsRehash: false };
     }
 
-    if (!password || !hashedPassword) {
-        // Always perform a dummy bcrypt operation to prevent timing attacks
-        await bcrypt.compare('dummy-password', '$2b$14$dummy.hash.to.prevent.timing.attacks.in.production');
-        return false;
+    if (!password || !hash) {
+      // Perform dummy operation to prevent timing attacks
+      await this.dummyVerify();
+      return { valid: false, needsRehash: false };
     }
 
     // Rate limiting
-    if (options.identifier && !checkRateLimit(options.identifier)) {
-        throw new Error('Too many password verification attempts. Please try again later.');
-    }
-
-    // Validate hash format
-    if (!hashedPassword.startsWith('$2b$') && !hashedPassword.startsWith('$2a$') && !hashedPassword.startsWith('$2y$')) {
-        // Perform dummy operation to prevent timing attacks
-        await bcrypt.compare('dummy-password', '$2b$14$dummy.hash.to.prevent.timing.attacks.in.production');
-        return false;
+    if (options.identifier) {
+      const { allowed, retryAfter } = rateLimiter.checkLimit(
+        options.identifier
+      );
+      if (!allowed) {
+        throw new Error(
+          `Rate limit exceeded. Retry after ${retryAfter} seconds`
+        );
+      }
     }
 
     try {
-        // Normalize password to prevent timing attacks
-        const normalizedPassword = Buffer.from(password, 'utf8').toString('utf8');
-        
-        const isValid = await bcrypt.compare(normalizedPassword, hashedPassword);
-        
-        // Clear the password from memory (best effort)
-        if (typeof password === 'string') {
-            password = '';
-        }
-        
-        return isValid;
+      // Apply pepper
+      const pepperedPassword = this.applyPepper(password, config.getPepper());
+
+      let valid = false;
+      let needsRehash = false;
+
+      // Determine hash type and verify
+      if (hash.startsWith("$argon2")) {
+        valid = await argon2.verify(hash, pepperedPassword);
+        needsRehash = this.needsArgon2Rehash(hash);
+      } else if (hash.startsWith("$2")) {
+        valid = await bcrypt.compare(pepperedPassword, hash);
+        needsRehash = this.needsBcryptRehash(hash);
+      } else {
+        // Unknown hash format, perform dummy operation
+        await this.dummyVerify();
+        return { valid: false, needsRehash: true };
+      }
+
+      return { valid, needsRehash };
     } catch (error) {
-        // Log error for monitoring but don't expose details to prevent information leakage
-        console.error('Password verification error:', error);
-        return false;
+      // Log error securely without exposing sensitive information
+      console.error(
+        "Password verification error:",
+        error instanceof Error ? error.message : "Unknown error"
+      );
+      await this.dummyVerify();
+      return { valid: false, needsRehash: false };
+    } finally {
+      this.clearString(password);
     }
+  }
+
+  private async hashWithArgon2(password: string): Promise<string> {
+    return argon2.hash(password, {
+      type: argon2.argon2id,
+      timeCost: config.ARGON2_TIME_COST,
+      memoryCost: config.ARGON2_MEMORY_COST,
+      parallelism: config.ARGON2_PARALLELISM,
+    });
+  }
+
+  private async hashWithBcrypt(password: string): Promise<string> {
+    return bcrypt.hash(password, config.BCRYPT_ROUNDS);
+  }
+
+  private applyPepper(password: string, pepper: string): string {
+    if (!pepper) return password;
+
+    // Use HMAC to apply pepper
+    const hmac = createHash("sha256");
+    hmac.update(password + pepper);
+    return hmac.digest("base64");
+  }
+
+  private async dummyVerify(): Promise<void> {
+    // Precomputed Argon2 hash for timing attack protection
+    const dummyHash =
+      "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG";
+    await argon2.verify(dummyHash, "dummy");
+  }
+
+  private needsBcryptRehash(hash: string): boolean {
+    try {
+      const match = hash.match(/^\$2[aby]?\$(\d+)\$/);
+      if (!match) return true;
+
+      const rounds = parseInt(match[1], 10);
+      return rounds < config.BCRYPT_ROUNDS;
+    } catch {
+      return true;
+    }
+  }
+
+  private needsArgon2Rehash(hash: string): boolean {
+    try {
+      // Parse Argon2 parameters
+      const match = hash.match(/m=(\d+),t=(\d+),p=(\d+)/);
+      if (!match) return true;
+
+      const memoryCost = parseInt(match[1], 10);
+      const timeCost = parseInt(match[2], 10);
+      const parallelism = parseInt(match[3], 10);
+
+      return (
+        memoryCost < config.ARGON2_MEMORY_COST ||
+        timeCost < config.ARGON2_TIME_COST ||
+        parallelism < config.ARGON2_PARALLELISM
+      );
+    } catch {
+      return true;
+    }
+  }
+
+  private clearString(str: string): void {
+    // Best effort to clear string from memory
+    // Note: This is not guaranteed in JavaScript
+    if (typeof str === "string" && str.length > 0) {
+      try {
+        // Overwrite with random data
+        const buffer = Buffer.from(str);
+        randomBytes(buffer.length).copy(buffer);
+      } catch {
+        // Ignore errors in cleanup
+      }
+    }
+  }
 }
 
-/**
- * Generate a cryptographically secure random password
- * @param length - Password length (default: 16)
- * @param options - Character set options
- */
-export function generateSecurePassword(
+const hasher = new PasswordHasher();
+
+// ============================= Password Generation =============================
+
+class SecurePasswordGenerator {
+  private readonly charsets = {
+    lowercase: "abcdefghijkmnopqrstuvwxyz", // Excludes similar: l, o
+    uppercase: "ABCDEFGHJKLMNPQRSTUVWXYZ", // Excludes similar: I, O
+    numbers: "23456789", // Excludes similar: 0, 1
+    symbols: "!@#$%^&*()_+-=[]{}|;:,.<>?",
+    allLowercase: "abcdefghijklmnopqrstuvwxyz",
+    allUppercase: "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    allNumbers: "0123456789",
+  };
+
+  public generate(
     length: number = 16,
     options: {
-        includeLowercase?: boolean;
-        includeUppercase?: boolean;
-        includeNumbers?: boolean;
-        includeSymbols?: boolean;
-        excludeSimilar?: boolean;
+      includeLowercase?: boolean;
+      includeUppercase?: boolean;
+      includeNumbers?: boolean;
+      includeSymbols?: boolean;
+      excludeSimilar?: boolean;
+      minEntropy?: number;
     } = {}
-): string {
+  ): string {
     const {
-        includeLowercase = true,
-        includeUppercase = true,
-        includeNumbers = true,
-        includeSymbols = true,
-        excludeSimilar = true
+      includeLowercase = true,
+      includeUppercase = true,
+      includeNumbers = true,
+      includeSymbols = true,
+      excludeSimilar = true,
+      minEntropy = 60,
     } = options;
 
-    let charset = '';
+    // Validate length
+    if (length < 8 || length > 256) {
+      throw new Error("Password length must be between 8 and 256 characters");
+    }
+
+    // Build character set
+    let charset = "";
     const requiredChars: string[] = [];
-    
+
     if (includeLowercase) {
-        const lowerChars = excludeSimilar ? 'abcdefghijkmnopqrstuvwxyz' : 'abcdefghijklmnopqrstuvwxyz';
-        charset += lowerChars;
-        requiredChars.push(lowerChars[Math.floor(Math.random() * lowerChars.length)]);
+      const chars = excludeSimilar
+        ? this.charsets.lowercase
+        : this.charsets.allLowercase;
+      charset += chars;
+      requiredChars.push(this.secureRandomChar(chars));
     }
-    
+
     if (includeUppercase) {
-        const upperChars = excludeSimilar ? 'ABCDEFGHJKLMNPQRSTUVWXYZ' : 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-        charset += upperChars;
-        requiredChars.push(upperChars[Math.floor(Math.random() * upperChars.length)]);
+      const chars = excludeSimilar
+        ? this.charsets.uppercase
+        : this.charsets.allUppercase;
+      charset += chars;
+      requiredChars.push(this.secureRandomChar(chars));
     }
-    
+
     if (includeNumbers) {
-        const numberChars = excludeSimilar ? '23456789' : '0123456789';
-        charset += numberChars;
-        requiredChars.push(numberChars[Math.floor(Math.random() * numberChars.length)]);
+      const chars = excludeSimilar
+        ? this.charsets.numbers
+        : this.charsets.allNumbers;
+      charset += chars;
+      requiredChars.push(this.secureRandomChar(chars));
     }
-    
+
     if (includeSymbols) {
-        const symbolChars = '!@#$%^&*()_+-=[]{}|;:,.<>?';
-        charset += symbolChars;
-        requiredChars.push(symbolChars[Math.floor(Math.random() * symbolChars.length)]);
+      charset += this.charsets.symbols;
+      requiredChars.push(this.secureRandomChar(this.charsets.symbols));
     }
 
-    if (!charset) {
-        throw new Error('At least one character set must be enabled');
+    if (!charset || requiredChars.length > length) {
+      throw new Error("Invalid password generation options");
     }
 
-    if (length < 8 || length > 128) {
-        throw new Error('Password length must be between 8 and 128 characters');
+    // Generate password
+    let password = "";
+    let attempts = 0;
+    const maxAttempts = 100;
+
+    while (attempts < maxAttempts) {
+      password = this.generatePassword(length, charset, requiredChars);
+
+      // Validate entropy
+      const validation = validator.validate(password, {
+        minEntropy,
+        preventCommonPasswords: false,
+        preventUserInfo: false,
+      });
+
+      if (validation.entropy >= minEntropy) {
+        break;
+      }
+
+      attempts++;
     }
 
-    if (requiredChars.length > length) {
-        throw new Error('Password length must be at least as long as the number of required character types');
+    if (attempts >= maxAttempts) {
+      throw new Error("Failed to generate password with sufficient entropy");
     }
 
-    // Start with required characters to ensure all types are included
-    let password = '';
-    const randomBytesBuffer = randomBytes(length * 2);
-    let byteIndex = 0;
-    
-    // Add required characters first
-    for (const char of requiredChars) {
-        password += char;
-    }
-    
-    // Fill the rest with random characters from the full charset
+    return password;
+  }
+
+  private generatePassword(
+    length: number,
+    charset: string,
+    requiredChars: string[]
+  ): string {
+    const password: string[] = [...requiredChars];
+
+    // Fill remaining positions
     for (let i = requiredChars.length; i < length; i++) {
-        const randomIndex = randomBytesBuffer[byteIndex] % charset.length;
-        password += charset[randomIndex];
-        byteIndex++;
+      password.push(this.secureRandomChar(charset));
     }
 
-    // Shuffle the password to randomize character positions
-    const passwordArray = password.split('');
-    for (let i = passwordArray.length - 1; i > 0; i--) {
-        const j = randomBytesBuffer[byteIndex] % (i + 1);
-        [passwordArray[i], passwordArray[j]] = [passwordArray[j], passwordArray[i]];
-        byteIndex++;
+    // Secure shuffle using Fisher-Yates
+    for (let i = password.length - 1; i > 0; i--) {
+      const j = this.secureRandomInt(i + 1);
+      [password[i], password[j]] = [password[j], password[i]];
     }
 
-    return passwordArray.join('');
+    return password.join("");
+  }
+
+  private secureRandomChar(charset: string): string {
+    return charset[this.secureRandomInt(charset.length)];
+  }
+
+  private secureRandomInt(max: number): number {
+    const range = max;
+    const bytesNeeded = Math.ceil(Math.log2(range) / 8);
+    const maxValid = Math.floor(256 ** bytesNeeded / range) * range;
+
+    let value: number;
+    do {
+      const bytes = randomBytes(bytesNeeded);
+      value = bytes.reduce((acc, byte, i) => acc + byte * 256 ** i, 0);
+    } while (value >= maxValid);
+
+    return value % range;
+  }
 }
 
-/**
- * Check if a password hash needs to be rehashed (e.g., due to updated security standards)
- */
-export function needsRehash(hashedPassword: string): boolean {
-    try {
-        // Validate hash format first
-        if (!hashedPassword || !hashedPassword.startsWith('$2')) {
-            return true; // Invalid hash format, needs rehashing
-        }
-        
-        const parts = hashedPassword.split('$');
-        if (parts.length < 4) {
-            return true; // Invalid hash format
-        }
-        
-        // Extract rounds from hash
-        const rounds = parseInt(parts[2]);
-        if (isNaN(rounds)) {
-            return true; // Invalid rounds, needs rehashing
-        }
-        
-        return rounds < BCRYPT_ROUNDS;
-    } catch {
-        return true; // Any error means needs rehashing
-    }
+const generator = new SecurePasswordGenerator();
+
+// ============================= Exported Functions =============================
+
+export async function hashPassword(
+  password: string,
+  options: HashOptions = {}
+): Promise<string> {
+  return hasher.hash(password, options);
 }
+
+export async function verifyPassword(
+  password: string,
+  hash: string,
+  options: VerifyOptions = {}
+): Promise<boolean> {
+  const result = await hasher.verify(password, hash, options);
+  return result.valid;
+}
+
+export async function verifyAndCheckRehash(
+  password: string,
+  hash: string,
+  options: VerifyOptions = {}
+): Promise<{ valid: boolean; needsRehash: boolean; newHash?: string }> {
+  const result = await hasher.verify(password, hash, options);
+
+  if (result.valid && result.needsRehash && options.updateHash) {
+    const newHash = await hasher.hash(password, { skipValidation: true });
+    return { ...result, newHash };
+  }
+
+  return result;
+}
+
+export function validatePassword(
+  password: string,
+  policy?: Partial<PasswordPolicy>,
+  userInfo?: string[]
+): PasswordValidationResult {
+  return validator.validate(password, policy, userInfo);
+}
+
+export function generateSecurePassword(
+  length?: number,
+  options?: Parameters<typeof generator.generate>[1]
+): string {
+  return generator.generate(length, options);
+}
+
+export function needsRehash(hash: string): boolean {
+  if (!hash) return true;
+
+  if (hash.startsWith("$argon2")) {
+    return hasher["needsArgon2Rehash"](hash);
+  } else if (hash.startsWith("$2")) {
+    return hasher["needsBcryptRehash"](hash);
+  }
+
+  return true;
+}
+
+// Cleanup on process exit
+process.on("exit", () => {
+  rateLimiter.destroy();
+});
+
+// Export types for external use
+export type {
+  PasswordValidationResult,
+  HashOptions,
+  VerifyOptions,
+  PasswordPolicy,
+};

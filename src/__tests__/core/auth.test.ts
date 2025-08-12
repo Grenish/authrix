@@ -217,7 +217,7 @@ describe('Core Authentication', () => {
   describe('Error Handling', () => {
     it('should handle adapter errors gracefully', async () => {
       const email = 'test@example.com';
-      const password = 'password123';
+  const password = 'P@ssw0rdZ9!'; // strong password to bypass validation and reach adapter error
       
       mockAdapter.findUserByEmail.mockRejectedValue(new Error('Database error'));
       
@@ -226,7 +226,7 @@ describe('Core Authentication', () => {
 
     it('should handle createUser errors', async () => {
       const email = 'test@example.com';
-      const password = 'password123';
+  const password = 'P@ssw0rdZ9!'; // strong password to bypass validation and reach createUser path
       
       mockAdapter.createUser.mockRejectedValue(new Error('Create user failed'));
       

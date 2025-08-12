@@ -120,8 +120,9 @@ describe('React Framework', () => {
       const result = await logoutReact();
 
       expect(mockFetch).toHaveBeenCalledWith('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include'
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json' }
       });
       expect(result).toEqual({ message: 'Logged out successfully' });
     });
@@ -148,7 +149,9 @@ describe('React Framework', () => {
       const result = await getCurrentUserReact();
 
       expect(mockFetch).toHaveBeenCalledWith('/api/auth/me', {
-        credentials: 'include'
+  method: 'GET',
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json' }
       });
       expect(result).toEqual({ id: '1', email: 'test@example.com' });
     });

@@ -26,9 +26,11 @@ jest.mock('../../config', () => {
 // Mock the hash utility with concrete functions to avoid TS type inference issues
 jest.mock('../../utils/hash', () => {
   let counter = 0;
+  let verifyResult = false;
   return {
     hashPassword: async (password: any) => `hashed_${password}`,
-    verifyPassword: async () => false,
+    verifyPassword: async () => verifyResult,
+    setVerifyPasswordResult: (val: boolean) => { verifyResult = val; },
     validatePassword: (pwd: string) => {
       const errors: string[] = [];
       if (pwd.length < 8) errors.push('Password must be at least 8 characters long');
@@ -73,6 +75,17 @@ import {
 } from '../../core/forgotPassword';
 
 describe('Forgot Password Functions', () => {
+  function extractLastResetCode(): string {
+    const calls = (console.log as jest.MockedFunction<any>).mock.calls;
+    for (let i = calls.length - 1; i >= 0; i--) {
+      const first = calls[i][0];
+      if (typeof first === 'string' && first.includes('[AUTHRIX] Password reset code')) {
+        const m = first.match(/: (\d+)/);
+        if (m) return m[1];
+      }
+    }
+    return '123456';
+  }
   beforeEach(() => {
     // Reset all mocks
     jest.clearAllMocks();
@@ -208,157 +221,70 @@ describe('Forgot Password Functions', () => {
 
   describe('resetPasswordWithCode', () => {
     it('should successfully reset password with valid code', async () => {
-      const testUser = {
-        id: 'test-user-id',
-        email: 'test@example.com',
-        username: 'testuser',
-        password: 'old_hashed_password'
-      };
-
+      const testUser = { id: 'test-user-id', email: 'test@example.com', username: 'testuser', password: 'old_hashed_password' };
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
-
-      // First initiate forgot password to generate a code
-  await initiateForgotPassword('test@example.com', { useEmailService: false });
-
-      // Extract the code from the console.log call
-      const logCall = (console.log as jest.MockedFunction<any>).mock.calls.find((call: any) => 
-        call[0].includes('[AUTHRIX] Password reset code')
-      );
-      const codeMatch = logCall[0].match(/: (\d+)/);
-      const resetCode = codeMatch ? codeMatch[1] : '123456';
-
-  const result = await resetPasswordWithCode(
-        'test@example.com',
-        resetCode,
-        'newPassword123!'
-      );
-
+      await initiateForgotPassword('test@example.com', { useEmailService: false });
+      const code = extractLastResetCode();
+      const result = await resetPasswordWithCode('test@example.com', code, 'NewPassword123!');
       expect(result.success).toBe(true);
       expect(result.message).toBe('Password has been reset successfully');
-      expect(result.user).toBeDefined();
       expect(result.user?.email).toBe('test@example.com');
       expect(mockAdapter.updateUser).toHaveBeenCalledWith(
         'test-user-id',
-        expect.objectContaining({
-          password: 'hashed_newPassword123!',
-          passwordChangedAt: expect.any(Date)
-        })
+        expect.objectContaining({ password: 'hashed_NewPassword123!', passwordChangedAt: expect.any(Date) })
       );
     });
 
-    it('should validate password requirements', async () => {
-      const testUser = {
-        id: 'test-user-id',
-        email: 'test@example.com',
-        password: 'old_password'
-      };
-
+    it('should validate password requirements (too weak)', async () => {
+      const testUser = { id: 'test-user-id', email: 'test@example.com', password: 'old_password' };
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
-
-      await expect(resetPasswordWithCode(
-        'test@example.com',
-        '123456',
-        'weak'
-      )).rejects.toThrow('Password validation failed');
+      await expect(
+        resetPasswordWithCode('test@example.com', '123456', 'weak')
+      ).rejects.toThrow('Password validation failed');
     });
 
-    it('should enforce strong password requirements', async () => {
-      const testUser = {
-        id: 'test-user-id',
-        email: 'test@example.com',
-        password: 'old_password'
-      };
-
+    it('should enforce strong password requirements when enabled', async () => {
+      const testUser = { id: 'test-user-id', email: 'test@example.com', password: 'old_password' };
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
-
-      await expect(resetPasswordWithCode(
-        'test@example.com',
-        '123456',
-        'weakpassword',
-        { requireStrongPassword: true }
-      )).rejects.toThrow(/Password validation failed: .*one uppercase letter/i);
+      await expect(
+        resetPasswordWithCode('test@example.com', '123456', 'weakpassword', { requireStrongPassword: true })
+      ).rejects.toThrow(/Password validation failed: .*one uppercase letter/i);
     });
 
     it('should reject invalid reset code', async () => {
-      const testUser = {
-        id: 'test-user-id',
-        email: 'test@example.com',
-        password: 'old_password'
-      };
-
+      const testUser = { id: 'test-user-id', email: 'test@example.com', password: 'old_password' };
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
-
-    await expect(resetPasswordWithCode(
-        'test@example.com',
-        'invalid_code',
-        'NewPassword123!'
-      )).rejects.toThrow('No valid reset code found');
+      await expect(
+        resetPasswordWithCode('test@example.com', 'invalid_code', 'NewPassword123!')
+      ).rejects.toThrow('No valid reset code found');
     });
 
     it('should reject empty or missing code', async () => {
-      await expect(resetPasswordWithCode(
-        'test@example.com',
-        '',
-        'NewPassword123!'
-      )).rejects.toThrow('Reset code is required');
+      await expect(
+        resetPasswordWithCode('test@example.com', '', 'NewPassword123!')
+      ).rejects.toThrow('Reset code is required');
     });
 
     it('should prevent password reuse when enabled', async () => {
-      const testUser = {
-        id: 'test-user-id',
-        email: 'test@example.com',
-        password: 'current_hashed_password'
-      };
-
+      const testUser = { id: 'test-user-id', email: 'test@example.com', password: '$2b$14$current_hashed_password_mock______________111111' };
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
-
-      // First initiate forgot password
-  await initiateForgotPassword('test@example.com', { useEmailService: false });
-
-      // Extract code from console log
-      const logCall = (console.log as jest.MockedFunction<any>).mock.calls.find((call: any) => 
-        call[0].includes('[AUTHRIX] Password reset code')
-      );
-      const codeMatch = logCall[0].match(/: (\d+)/);
-      const resetCode = codeMatch ? codeMatch[1] : '123456';
-
-  // Mock the password verification to return true for the same password
-  const mockedHash: any = jest.requireMock('../../utils/hash') as any;
-  const originalVerify = mockedHash.verifyPassword;
-  mockedHash.verifyPassword = async () => true;
-
-  await expect(resetPasswordWithCode(
-        'test@example.com',
-        resetCode,
-        'SamePassword123!',
-        { preventReuse: true }
-      )).rejects.toThrow('New password cannot be the same as your current password');
-  // restore mocked verify to default
-  mockedHash.verifyPassword = originalVerify;
-    });
-
-    it('should handle database adapter without updateUser method', async () => {
-      // Save original method and remove it
-      const originalUpdateUser = mockAdapter.updateUser;
-      delete (mockAdapter as any).updateUser;
-      
-      mockAdapter.findUserByEmail.mockResolvedValue({
-        id: 'test-user-id',
-        email: 'test@example.com',
-        password: 'old_password'
-      });
-
-  // First initiate forgot password to get a code
-  await initiateForgotPassword('test@example.com', { useEmailService: false });
-
-  await expect(resetPasswordWithCode(
-        'test@example.com',
-        '123456',
-        'NewPassword123!'
-      )).rejects.toThrow('Invalid or expired reset code');
-      
-      // Restore the original method
-      (mockAdapter as any).updateUser = originalUpdateUser;
+      await initiateForgotPassword('test@example.com', { useEmailService: false });
+      const code = extractLastResetCode();
+      const mockedHash: any = jest.requireMock('../../utils/hash');
+      // Force verifyPassword to report equality
+      mockedHash.setVerifyPasswordResult(true);
+      if (mockedHash.verifyPassword) {
+        (mockedHash as any).verifyPassword = async () => true;
+      }
+      await expect(
+        resetPasswordWithCode('test@example.com', code, 'SamePassword123!', { preventReuse: true })
+      ).rejects.toThrow('New password cannot be the same as your current password');
+      // Then ensure changing verify result allows reset with different password
+      mockedHash.setVerifyPasswordResult(false);
+      await initiateForgotPassword('test@example.com', { useEmailService: false });
+      const code2 = extractLastResetCode();
+      const success = await resetPasswordWithCode('test@example.com', code2, 'DifferentPassword123!', { preventReuse: true });
+      expect(success.success).toBe(true);
     });
   });
 
@@ -453,35 +379,19 @@ describe('Forgot Password Functions', () => {
 
   describe('Error handling', () => {
     it('should handle database adapter without updateUser method', async () => {
-      // Mock a limited adapter by setting updateUser to undefined
       const originalUpdateUser = mockAdapter.updateUser;
       delete mockAdapter.updateUser;
-      
-      const testUser = {
-        id: 'test-user-id',
-        email: 'test@example.com',
-        password: 'old_password'
-      };
 
+      const testUser = { id: 'test-user-id', email: 'alt2@example.com', password: 'old_password' };
       mockAdapter.findUserByEmail.mockResolvedValue(testUser);
 
-      // First, initiate a password reset to create a valid code
-  await initiateForgotPassword('test@example.com', { useEmailService: false });
-      
-      // Get the generated code from console.log
-      const logCall = (console.log as jest.MockedFunction<any>).mock.calls.find((call: any) => 
-        call[0].includes('[AUTHRIX] Password reset code')
-      );
-      const codeMatch = logCall[0].match(/: (.+)$/);
-      const resetCode = codeMatch ? codeMatch[1] : '123456';
+      await initiateForgotPassword('alt2@example.com', { useEmailService: false });
+      const code = extractLastResetCode();
 
-      await expect(resetPasswordWithCode(
-        'test@example.com',
-        resetCode,
-        'NewPassword123!'
-      )).rejects.toThrow('Database adapter does not support password updates');
-      
-      // Restore the original method
+      await expect(
+      resetPasswordWithCode('alt2@example.com', code, 'NewPassword123!')
+      ).rejects.toThrow('Database adapter does not support password updates');
+
       mockAdapter.updateUser = originalUpdateUser;
     });
 

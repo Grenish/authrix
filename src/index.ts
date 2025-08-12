@@ -21,6 +21,16 @@ export { initAuth, authConfig, isAuthrixInitialized, getAuthrixStatus } from "./
 export { requireAuth } from "./core/requireAuth";
 export { authMiddleware } from "./middleware/authMiddleware";
 
+// --- Essential Security Utilities ---
+export { 
+	hashPassword, 
+	verifyPassword, 
+	verifyAndCheckRehash, 
+	validatePassword,
+	generateSecurePassword,
+	needsRehash
+} from './utils/hash';
+
 // --- Core Types ---
 export type { AuthDbAdapter, AuthUser } from "./types/db";
 export type { AuthenticatedRequest } from "./middleware/authMiddleware";

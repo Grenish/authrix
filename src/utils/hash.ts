@@ -92,9 +92,11 @@ class SecurityConfig {
   }
 
   private generateDefaultPepper(): string {
-    // In production, this should be loaded from secure storage
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Password pepper must be configured in production');
+    }
     console.warn(
-      "⚠️ Using generated pepper. Configure AUTHRIX_PASSWORD_PEPPER in production!"
+      "⚠️  DEVELOPMENT MODE: Using generated pepper. Configure AUTHRIX_PASSWORD_PEPPER before deploying to production!"
     );
     return randomBytes(32).toString("hex");
   }

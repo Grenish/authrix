@@ -1,6 +1,6 @@
 {
   "name": "authrix",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Lightweight, flexible authentication library for Node.js and TypeScript.",
   "sideEffects": false,
   "keywords": [

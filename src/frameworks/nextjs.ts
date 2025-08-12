@@ -1,4 +1,6 @@
-// Next.js utilities for Authrix - Refactored and optimized version
+// Next.js utilities for Authrix - unified API for App Router, Pages Router & Middleware
+// The goal of this refactor is to offer consistent behaviors while preserving
+// existing exported function names for backwards compatibility.
 
 import { signupCore } from "../core/signup";
 import { signinCore } from "../core/signin";
@@ -10,8 +12,6 @@ import { authConfig } from "../config";
 interface NextJsModules {
   NextRequest?: any;
   NextResponse?: any;
-  NextApiRequest?: any;
-  NextApiResponse?: any;
   cookies?: any;
   headers?: any;
 }
@@ -52,51 +52,48 @@ class ModuleLoader {
   };
 
   static async loadModules(): Promise<NextJsModules> {
-    if (this.detectionComplete) {
-      return this.cache;
-    }
+    if (this.detectionComplete) return this.cache;
 
-    // Update runtime info
     this.environmentInfo.runtimeInfo = {
+      // Use classic detection so Jest / Node environments that still expose require get flagged
       hasRequire: typeof require !== 'undefined',
       hasProcess: typeof process !== 'undefined',
       hasGlobalThis: typeof globalThis !== 'undefined',
       hasNextData: typeof (globalThis as any).__NEXT_DATA__ !== 'undefined',
       nextRuntime: typeof process !== 'undefined' ? process.env?.NEXT_RUNTIME : undefined,
+    } as any;
+
+    // Use dynamic import so Edge runtime (which disallows require) does not crash
+    const tryImport = async (path: string) => {
+      try { return await import(path); } catch { return null; }
     };
 
-    try {
-      // Check if we're in a Node.js environment
-      if (typeof require !== 'undefined') {
-        // Try loading Next.js modules
-        try {
-          const nextServer = require('next/server');
-          this.cache.NextRequest = nextServer.NextRequest;
-          this.cache.NextResponse = nextServer.NextResponse;
-          this.environmentInfo.hasMiddlewareSupport = true;
-          this.environmentInfo.isNextJsAvailable = true;
-        } catch {}
+    const nextServer = await tryImport('next/server');
+    if (nextServer) {
+      this.cache.NextRequest = (nextServer as any).NextRequest;
+      this.cache.NextResponse = (nextServer as any).NextResponse;
+      this.environmentInfo.hasMiddlewareSupport = true;
+      this.environmentInfo.isNextJsAvailable = true;
+    }
 
-        try {
-          const nextHeaders = require('next/headers');
-          this.cache.cookies = nextHeaders.cookies;
-          this.cache.headers = nextHeaders.headers;
-          this.environmentInfo.hasAppRouterSupport = true;
-          this.environmentInfo.isNextJsAvailable = true;
-        } catch {}
+    const nextHeaders = await tryImport('next/headers');
+    if (nextHeaders) {
+      this.cache.cookies = (nextHeaders as any).cookies;
+      this.cache.headers = (nextHeaders as any).headers;
+      this.environmentInfo.hasAppRouterSupport = true;
+      this.environmentInfo.isNextJsAvailable = true;
+    }
 
-        // Check environment context
-        if (this.cache.cookies) {
-          this.environmentInfo.context = 'app-router';
-        } else if (this.cache.NextRequest && this.cache.NextResponse) {
-          this.environmentInfo.context = 'middleware';
-        } else {
-          this.environmentInfo.context = 'pages-router';
-          this.environmentInfo.hasPagesRouterSupport = true;
-        }
-      }
-    } catch (error) {
-      console.debug('Next.js module loading failed:', error);
+    // Determine context heuristically
+    if (this.cache.cookies) {
+      // Presence of cookies() indicates App Router / Route Handler / Server Component context
+      this.environmentInfo.context = 'app-router';
+    } else if (this.cache.NextRequest && this.cache.NextResponse) {
+      this.environmentInfo.context = 'middleware';
+    } else {
+      // If neither dynamic modules loaded we may still be in Pages router (Jest / API route)
+      this.environmentInfo.context = 'pages-router';
+      this.environmentInfo.hasPagesRouterSupport = true;
     }
 
     this.detectionComplete = true;
@@ -104,33 +101,107 @@ class ModuleLoader {
     return this.cache;
   }
 
-  static getEnvironmentInfo(): EnvironmentInfo {
-    return { ...this.environmentInfo };
-  }
-
+  static getEnvironmentInfo(): EnvironmentInfo { return { ...this.environmentInfo }; }
   static reset(): EnvironmentInfo {
     this.cache = {};
     this.detectionComplete = false;
-    this.environmentInfo = {
-      isNextJsAvailable: false,
-      context: 'unknown',
-      hasAppRouterSupport: false,
-      hasPagesRouterSupport: false,
-      hasMiddlewareSupport: false,
-      detectionComplete: false,
-      runtimeInfo: {
-        hasRequire: typeof require !== 'undefined',
-        hasProcess: typeof process !== 'undefined',
-        hasGlobalThis: typeof globalThis !== 'undefined',
-        hasNextData: typeof (globalThis as any).__NEXT_DATA__ !== 'undefined',
-        nextRuntime: typeof process !== 'undefined' ? process.env?.NEXT_RUNTIME : undefined,
-      }
-    };
-    
-    // Re-run detection
-    this.loadModules();
+    // Force immediate re-detection so callers get fresh runtime info (mirrors previous behavior)
+    // Fire and forget; synchronous callers will still see updated runtimeInfo defaults, then async load updates.
+    void this.loadModules();
     return this.getEnvironmentInfo();
   }
+}
+
+// --- Unified Context Helpers -------------------------------------------------
+
+type AnyReq = any; // intentionally loose: supports NextRequest, API req, standard Request
+type AnyRes = any; // supports NextResponse, API res
+
+interface CookieSetOptions {
+  name: string; value: string; options?: any;
+}
+
+function buildCookieString(name: string, value: string, options: any = {}) {
+  return CookieUtils.createCookieString(name, value, options);
+}
+
+function setCookieInPages(res: AnyRes, cookie: string) {
+  if (!res?.setHeader) return false;
+  const existing = res.getHeader?.('Set-Cookie');
+  if (existing) {
+    const arr = Array.isArray(existing) ? existing : [existing];
+    res.setHeader('Set-Cookie', [...arr, cookie]);
+  } else {
+    res.setHeader('Set-Cookie', cookie);
+  }
+  return true;
+}
+
+async function setCookieInApp(tokenInfo: CookieSetOptions): Promise<boolean> {
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (!modules.cookies) return false;
+    const store = modules.cookies();
+    store.set(tokenInfo.name, tokenInfo.value, tokenInfo.options);
+    return true;
+  } catch { return false; }
+}
+
+async function applyAuthCookie(token: string, cookieOptions: any, ctx?: { res?: AnyRes }): Promise<boolean> {
+  const name = CookieUtils.getCookieName();
+  const successPages = ctx?.res ? setCookieInPages(ctx.res, buildCookieString(name, token, cookieOptions)) : false;
+  if (successPages) return true;
+  const successApp = await setCookieInApp({ name, value: token, options: cookieOptions });
+  return successApp;
+}
+
+async function clearAuthCookie(ctx?: { res?: AnyRes }): Promise<boolean> {
+  const name = CookieUtils.getCookieName();
+  const clearString = CookieUtils.createLogoutCookie(name);
+  const successPages = ctx?.res ? setCookieInPages(ctx.res, clearString) : false;
+  if (successPages) return true;
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (modules.cookies) {
+      const store = modules.cookies();
+      store.set(name, "", { path: '/', expires: new Date(0) });
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+// Extract token from any supported context
+async function extractToken(ctx?: { req?: AnyReq; request?: Request }): Promise<string | null> {
+  // 1. Pages router (req.cookies)
+  if (ctx?.req?.cookies && typeof ctx.req.cookies === 'object') {
+    return ctx.req.cookies[CookieUtils.getCookieName()] || null;
+  }
+
+  // 2. App router (cookies())
+  try {
+    const modules = await ModuleLoader.loadModules();
+    if (modules.cookies) {
+      const store = modules.cookies();
+      const value = store.get(CookieUtils.getCookieName())?.value;
+      if (value) return value;
+    }
+  } catch {}
+
+  // 3. Standard Request (Route Handler / Middleware cloning) cookie header
+  const reqLike = ctx?.request || ctx?.req;
+  const header = reqLike?.headers ? (reqLike.headers.get ? reqLike.headers.get('cookie') : reqLike.headers['cookie']) : undefined;
+  if (typeof header === 'string') {
+    const cookies = parseCookies(header);
+    if (cookies[CookieUtils.getCookieName()]) return cookies[CookieUtils.getCookieName()];
+  }
+
+  // 4. Middleware NextRequest (has cookies.get())
+  if (reqLike?.cookies?.get) {
+    try { return reqLike.cookies.get(CookieUtils.getCookieName())?.value || null; } catch {}
+  }
+
+  return null;
 }
 
 // Cookie utilities
@@ -226,97 +297,31 @@ const ErrorMessages = {
 
 export async function signupNextApp(email: string, password: string) {
   const result = await signupCore(email, password);
-  
-  try {
-    const modules = await ModuleLoader.loadModules();
-    if (!modules.cookies) {
-      throw new Error(ErrorMessages.APP_ROUTER_REQUIRED('signupNextApp'));
-    }
-    
-    const cookieStore = modules.cookies();
-    cookieStore.set(CookieUtils.getCookieName(), result.token, result.cookieOptions);
-    return result.user;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('Next.js')) {
-      throw error;
-    }
-    throw new Error(ErrorMessages.COOKIE_SET_FAILED('signupNextApp'));
-  }
+  const ok = await applyAuthCookie(result.token, result.cookieOptions);
+  if (!ok) throw new Error(ErrorMessages.COOKIE_SET_FAILED('signupNextApp'));
+  return result.user;
 }
 
 export async function signinNextApp(email: string, password: string) {
   const result = await signinCore(email, password);
-  
-  try {
-    const modules = await ModuleLoader.loadModules();
-    if (!modules.cookies) {
-      throw new Error(ErrorMessages.APP_ROUTER_REQUIRED('signinNextApp'));
-    }
-    
-    const cookieStore = modules.cookies();
-    cookieStore.set(CookieUtils.getCookieName(), result.token, result.cookieOptions);
-    return result.user;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('Next.js')) {
-      throw error;
-    }
-    throw new Error(ErrorMessages.COOKIE_SET_FAILED('signinNextApp'));
-  }
+  const ok = await applyAuthCookie(result.token, result.cookieOptions);
+  if (!ok) throw new Error(ErrorMessages.COOKIE_SET_FAILED('signinNextApp'));
+  return result.user;
 }
 
 export async function logoutNextApp() {
   const result = logoutCore();
-  
-  try {
-    const modules = await ModuleLoader.loadModules();
-    if (!modules.cookies) {
-      throw new Error(ErrorMessages.APP_ROUTER_REQUIRED('logoutNextApp'));
-    }
-    
-    const cookieStore = modules.cookies();
-    // Use the first cookie to clear (which should be the auth cookie)
-    const cookieToSet = result.cookiesToClear[0];
-    if (cookieToSet) {
-      cookieStore.set(cookieToSet.name, "", cookieToSet.options);
-    }
-    return { message: result.message };
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('Next.js')) {
-      throw error;
-    }
-    throw new Error(ErrorMessages.COOKIE_SET_FAILED('logoutNextApp'));
-  }
+  const ok = await clearAuthCookie();
+  if (!ok) throw new Error(ErrorMessages.COOKIE_SET_FAILED('logoutNextApp'));
+  return { message: result.message };
 }
 
 export async function getCurrentUserNextApp() {
-  try {
-    const modules = await ModuleLoader.loadModules();
-    if (!modules.cookies) {
-      throw new Error(ErrorMessages.APP_ROUTER_REQUIRED('getCurrentUserNextApp'));
-    }
-    
-    const cookieStore = modules.cookies();
-    const token = cookieStore.get(CookieUtils.getCookieName())?.value || null;
-    return getCurrentUserFromToken(token);
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('Next.js')) {
-      throw error;
-    }
-    return null;
-  }
+  try { return getCurrentUserFromToken(await extractToken()); } catch { return null; }
 }
 
 export async function isAuthenticatedNextApp(): Promise<boolean> {
-  try {
-    const modules = await ModuleLoader.loadModules();
-    if (!modules.cookies) return false;
-    
-    const cookieStore = modules.cookies();
-    const token = cookieStore.get(CookieUtils.getCookieName())?.value || null;
-    return isTokenValid(token);
-  } catch {
-    return false;
-  }
+  try { return isTokenValid(await extractToken()); } catch { return false; }
 }
 
 // === Pages Router Functions ===
@@ -518,145 +523,34 @@ export function withAuth<T extends Record<string, any>, U extends Record<string,
 
 // === Flexible Functions (Auto-detect environment) ===
 
-export async function signupNext(
-  email: string,
-  password: string,
-  res?: any
-) {
+export async function signupNext(email: string, password: string, res?: any) {
   const result = await signupCore(email, password);
-  
-  // Try Pages Router if res provided
-  if (res?.setHeader) {
-    const cookie = CookieUtils.createCookieString(
-      CookieUtils.getCookieName(),
-      result.token,
-      result.cookieOptions
-    );
-    res.setHeader('Set-Cookie', cookie);
-    return result.user;
-  }
-  
-  // Try App Router
-  try {
-    const modules = await ModuleLoader.loadModules();
-    if (modules.cookies) {
-      const cookieStore = modules.cookies();
-      cookieStore.set(CookieUtils.getCookieName(), result.token, result.cookieOptions);
-      return result.user;
-    }
-  } catch {}
-  
-  // Fallback error
-  throw new Error(
-    'Unable to set authentication cookie. ' +
-    'Pass a response object for Pages Router or call from App Router context.'
-  );
+  const ok = await applyAuthCookie(result.token, result.cookieOptions, { res });
+  if (!ok) throw new Error('Unable to set authentication cookie. Pass a response object for Pages Router or call from App Router context.');
+  return result.user;
 }
 
-export async function signinNext(
-  email: string,
-  password: string,
-  res?: any
-) {
+export async function signinNext(email: string, password: string, res?: any) {
   const result = await signinCore(email, password);
-  
-  // Try Pages Router if res provided
-  if (res?.setHeader) {
-    const cookie = CookieUtils.createCookieString(
-      CookieUtils.getCookieName(),
-      result.token,
-      result.cookieOptions
-    );
-    res.setHeader('Set-Cookie', cookie);
-    return result.user;
-  }
-  
-  // Try App Router
-  try {
-    const modules = await ModuleLoader.loadModules();
-    if (modules.cookies) {
-      const cookieStore = modules.cookies();
-      cookieStore.set(CookieUtils.getCookieName(), result.token, result.cookieOptions);
-      return result.user;
-    }
-  } catch {}
-  
-  // Fallback error
-  throw new Error(
-    'Unable to set authentication cookie. ' +
-    'Pass a response object for Pages Router or call from App Router context.'
-  );
+  const ok = await applyAuthCookie(result.token, result.cookieOptions, { res });
+  if (!ok) throw new Error('Unable to set authentication cookie. Pass a response object for Pages Router or call from App Router context.');
+  return result.user;
 }
 
 export async function logoutNext(res?: any) {
   const result = logoutCore();
-  
-  // Try Pages Router if res provided
-  if (res?.setHeader) {
-    const cookie = CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
-    res.setHeader('Set-Cookie', cookie);
-    return { message: result.message };
-  }
-  
-  // Try App Router
-  try {
-    const modules = await ModuleLoader.loadModules();
-    if (modules.cookies) {
-      const cookieStore = modules.cookies();
-      // Use the first cookie to clear (which should be the auth cookie)
-      const cookieToSet = result.cookiesToClear[0];
-      if (cookieToSet) {
-        cookieStore.set(cookieToSet.name, "", cookieToSet.options);
-      }
-      return { message: result.message };
-    }
-  } catch {}
-  
-  // Fallback error
-  throw new Error(
-    'Unable to clear authentication cookie. ' +
-    'Pass a response object for Pages Router or call from App Router context.'
-  );
+  const ok = await clearAuthCookie({ res });
+  if (!ok) throw new Error('Unable to clear authentication cookie. Pass a response object for Pages Router or call from App Router context.');
+  return { message: result.message };
 }
 
 export async function getCurrentUserNext(req?: any) {
-  // Try Pages Router if req provided
-  if (req?.cookies) {
-    const token = req.cookies[CookieUtils.getCookieName()] || null;
-    return getCurrentUserFromToken(token);
-  }
-  
-  // Try App Router
-  try {
-    const modules = await ModuleLoader.loadModules();
-    if (modules.cookies) {
-      const cookieStore = modules.cookies();
-      const token = cookieStore.get(CookieUtils.getCookieName())?.value || null;
-      return getCurrentUserFromToken(token);
-    }
-  } catch {}
-  
-  return null;
+  const token = await extractToken({ req });
+  return getCurrentUserFromToken(token);
 }
 
 export async function isAuthenticatedNext(req?: any): Promise<boolean> {
-  // Try Pages Router if req provided
-  if (req?.cookies) {
-    const token = req.cookies[CookieUtils.getCookieName()] || null;
-    return isTokenValid(token);
-  }
-  
-  // Try App Router
-  try {
-    const modules = await ModuleLoader.loadModules();
-    if (modules.cookies) {
-      const cookieStore = modules.cookies();
-      const token = cookieStore.get(CookieUtils.getCookieName())?.value || null;
-      return isTokenValid(token);
-    }
-  } catch {}
-  
-  return false;
+  return isTokenValid(await extractToken({ req }));
 }
 
 // === Flexible Functions with explicit naming ===

@@ -128,6 +128,8 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "test:security": "jest --testNamePattern='Security'",
+    "test:performance": "jest --testNamePattern='Performance'",
     "test:ci": "jest --ci --coverage --watchAll=false"
   },
   "repository": {
@@ -141,6 +143,7 @@
   "dependencies": {
     "@sendgrid/mail": "^8.1.5",
     "@types/nodemailer": "^6.4.17",
+    "argon2": "^0.44.0",
     "bcryptjs": "^3.0.2",
     "cookie": "^1.0.2",
     "jsonwebtoken": "^9.0.2",

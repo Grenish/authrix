@@ -1,6 +1,6 @@
 {
   "name": "authrix",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Lightweight, flexible authentication library for Node.js and TypeScript.",
   "sideEffects": false,
   "keywords": [
@@ -117,7 +117,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/postbuild-trim.js",
     "dev": "tsup --watch",
     "prepare": "npm run build",
     "prepack": "npm run build",

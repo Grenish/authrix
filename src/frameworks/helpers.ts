@@ -5,12 +5,12 @@
  * For framework-specific implementations, see the examples below.
  */
 
-import { 
-  handleGoogleSSO, 
-  handleGitHubSSO, 
-  generateSSOState, 
+import {
+  handleGoogleSSO,
+  handleGitHubSSO,
+  generateSSOState,
   verifySSOState,
-  SSOOptions 
+  SSOOptions
 } from "../core/sso";
 import { 
   initiateForgotPassword, 
@@ -26,144 +26,117 @@ import { getFacebookOAuthURL } from "../providers/facebook";
 import { getLinkedInOAuthURL } from "../providers/linkedin";
 import { getXOAuthURL } from "../providers/x";
 
+// -------------------- Types --------------------
+export type SupportedProvider =
+  | 'google'
+  | 'github'
+  | 'apple'
+  | 'discord'
+  | 'facebook'
+  | 'linkedin'
+  | 'x';
+
+interface ProviderUrlBuilderSync {
+  (opts: { state: string }): string;
+}
+
+interface ProviderUrlBuilderAsync {
+  (opts: { state: string }): Promise<{ url: string } | { url: string; state?: string }>;
+}
+
+type ProviderUrlBuilder = ProviderUrlBuilderSync | ProviderUrlBuilderAsync;
+
+// Mapping of provider -> URL builder (kept internal)
+const providerUrlBuilders: Record<string, ProviderUrlBuilder> = {
+  google: getGoogleOAuthURL,
+  github: getGitHubOAuthURL,
+  apple: getAppleOAuthURL,
+  discord: getDiscordOAuthURL,
+  facebook: getFacebookOAuthURL,
+  linkedin: getLinkedInOAuthURL,
+  x: getXOAuthURL // async returning { url }
+};
+
+// Lazy handler dynamic imports (only when needed) for non-eager providers
+async function invokeSSOHandler(provider: SupportedProvider, code: string, state: string, options: SSOOptions) {
+  switch (provider) {
+    case 'google':
+      return handleGoogleSSO(code, options);
+    case 'github':
+      return handleGitHubSSO(code, options);
+    case 'apple':
+      return (await import('../core/sso')).handleAppleSSO(code, options);
+    case 'discord':
+      return (await import('../core/sso')).handleDiscordSSO(code, options);
+    case 'facebook':
+      return (await import('../core/sso')).handleFacebookSSO(code, options);
+    case 'linkedin':
+      return (await import('../core/sso')).handleLinkedInSSO(code, options);
+    case 'x':
+      return (await import('../core/sso')).handleXSSO(code, state, options);
+    default:
+      throw new Error(`Unsupported provider: ${provider}`);
+  }
+}
+
+// -------------------- URL Helpers (granular) --------------------
+export function buildProviderAuthUrl(provider: SupportedProvider, redirectUrl: string = '/dashboard'): Promise<string> | string {
+  const state = generateSSOState({ redirect: redirectUrl });
+  const builder = providerUrlBuilders[provider];
+  if (!builder) throw new Error(`No OAuth URL builder registered for provider: ${provider}`);
+  const result = builder({ state } as any);
+  if (result && typeof (result as any).then === 'function') {
+    // async provider (X)
+    return (result as Promise<any>).then(r => ('url' in r ? r.url : r));
+  }
+  return result as string;
+}
+
+export function getGoogleAuthUrl(redirectUrl?: string) { return buildProviderAuthUrl('google', redirectUrl); }
+export function getGitHubAuthUrl(redirectUrl?: string) { return buildProviderAuthUrl('github', redirectUrl); }
+export function getAppleAuthUrl(redirectUrl?: string) { return buildProviderAuthUrl('apple', redirectUrl); }
+export function getDiscordAuthUrl(redirectUrl?: string) { return buildProviderAuthUrl('discord', redirectUrl); }
+export function getFacebookAuthUrl(redirectUrl?: string) { return buildProviderAuthUrl('facebook', redirectUrl); }
+export function getLinkedInAuthUrl(redirectUrl?: string) { return buildProviderAuthUrl('linkedin', redirectUrl); }
+export function getXAuthUrl(redirectUrl?: string) { return buildProviderAuthUrl('x', redirectUrl); }
+
+// Batch helper
+export async function getAllAuthUrls(redirectUrl: string = '/dashboard', providers: SupportedProvider[] = ['google','github','apple','discord','facebook','linkedin','x']): Promise<Record<SupportedProvider, string>> {
+  const entries = await Promise.all(providers.map(async p => [p, await buildProviderAuthUrl(p, redirectUrl)] as [SupportedProvider, string]));
+  return Object.fromEntries(entries) as Record<SupportedProvider, string>;
+}
+
 /**
  * Universal SSO helpers that work with any framework
  */
 export const ssoHelpers = {
-  /**
-   * Get Google OAuth URL with state
-   */
-  getGoogleAuthUrl(redirectUrl: string = '/dashboard'): string {
-    const state = generateSSOState({ redirect: redirectUrl });
-    return getGoogleOAuthURL({ state });
-  },
-
-  /**
-   * Get GitHub OAuth URL with state
-   */
-  getGitHubAuthUrl(redirectUrl: string = '/dashboard'): string {
-    const state = generateSSOState({ redirect: redirectUrl });
-    return getGitHubOAuthURL({ state });
-  },
-
-  /**
-   * Get Apple OAuth URL with state
-   */
-  getAppleAuthUrl(redirectUrl: string = '/dashboard'): string {
-    const state = generateSSOState({ redirect: redirectUrl });
-    return getAppleOAuthURL({ state });
-  },
-
-  /**
-   * Get Discord OAuth URL with state
-   */
-  getDiscordAuthUrl(redirectUrl: string = '/dashboard'): string {
-    const state = generateSSOState({ redirect: redirectUrl });
-    return getDiscordOAuthURL({ state });
-  },
-
-  /**
-   * Get Facebook OAuth URL with state
-   */
-  getFacebookAuthUrl(redirectUrl: string = '/dashboard'): string {
-    const state = generateSSOState({ redirect: redirectUrl });
-    return getFacebookOAuthURL({ state });
-  },
-
-  /**
-   * Get LinkedIn OAuth URL with state
-   */
-  getLinkedInAuthUrl(redirectUrl: string = '/dashboard'): string {
-    const state = generateSSOState({ redirect: redirectUrl });
-    return getLinkedInOAuthURL({ state });
-  },
-
-  /**
-   * Get X/Twitter OAuth URL with state
-   */
-  async getXAuthUrl(redirectUrl: string = '/dashboard'): Promise<string> {
-    const state = generateSSOState({ redirect: redirectUrl });
-    const result = await getXOAuthURL({ state });
-    return result.url;
-  },
-
-  /**
-   * Handle OAuth callback (works with any provider)
-   */
-  async handleCallback(
-    provider: 'google' | 'github' | 'apple' | 'discord' | 'facebook' | 'linkedin' | 'x',
-    code: string,
-    state: string,
-    options: SSOOptions = {}
-  ) {
-    // Verify state
+  getGoogleAuthUrl,
+  getGitHubAuthUrl,
+  getAppleAuthUrl,
+  getDiscordAuthUrl,
+  getFacebookAuthUrl,
+  getLinkedInAuthUrl,
+  getXAuthUrl,
+  buildProviderAuthUrl,
+  getAllAuthUrls,
+  async handleCallback(provider: SupportedProvider, code: string, state: string, options: SSOOptions = {}) {
     const stateData = verifySSOState(state);
-    
-    // Handle SSO based on provider
-    let result;
-    switch (provider) {
-      case 'google':
-        result = await handleGoogleSSO(code, options);
-        break;
-      case 'github':
-        result = await handleGitHubSSO(code, options);
-        break;
-      case 'apple':
-        result = await (await import('../core/sso')).handleAppleSSO(code, options);
-        break;
-      case 'discord':
-        result = await (await import('../core/sso')).handleDiscordSSO(code, options);
-        break;
-      case 'facebook':
-        result = await (await import('../core/sso')).handleFacebookSSO(code, options);
-        break;
-      case 'linkedin':
-        result = await (await import('../core/sso')).handleLinkedInSSO(code, options);
-        break;
-      case 'x':
-        // For X we require state during callback for PKCE verification
-        result = await (await import('../core/sso')).handleXSSO(code, state, options);
-        break;
-      default:
-        throw new Error(`Unsupported provider: ${provider}`);
-    }
-    
-    return {
-      ...result,
-      redirectUrl: stateData.redirect || '/dashboard'
-    };
+    const result = await invokeSSOHandler(provider, code, state, options);
+    return { ...result, redirectUrl: stateData.redirect || '/dashboard' };
   },
-
-  /**
-   * Generate secure state for OAuth
-   */
-  generateState(data?: any): string {
-    return generateSSOState(data);
-  },
-
-  /**
-   * Verify OAuth state
-   */
-  verifyState(state: string, maxAge?: number): any {
-    return verifySSOState(state, maxAge);
-  }
+  generateState: (data?: any) => generateSSOState(data),
+  verifyState: (state: string, maxAge?: number) => verifySSOState(state, maxAge)
 };
 
 /**
  * Universal forgot password helpers
  */
 export const forgotPasswordHelpers = {
-  /**
-   * Initiate password reset
-   */
-  async initiate(email: string, options: ForgotPasswordOptions = {}) {
-    return await initiateForgotPassword(email, options);
-  },
-
-  /**
-   * Reset password with verification code
-   */
-  async reset(email: string, code: string, newPassword: string, options: ResetPasswordOptions = {}) {
-    return await resetPasswordWithCode(email, code, newPassword, options);
-  }
+  initiate: (email: string, options: ForgotPasswordOptions = {}) => initiateForgotPassword(email, options),
+  reset: (email: string, code: string, newPassword: string, options: ResetPasswordOptions = {}) =>
+    resetPasswordWithCode(email, code, newPassword, options)
 };
+
+// Backwards-compatible named exports for tree-shaking (optional use)
+export const generateState = (data?: any) => generateSSOState(data);
+export const verifyState = (state: string, maxAge?: number) => verifySSOState(state, maxAge);

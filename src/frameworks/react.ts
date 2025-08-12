@@ -3,6 +3,22 @@
 
 import { authConfig } from "../config";
 
+// Generic fetch wrapper with JSON + error normalization
+async function apiFetch<T>(url: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(url, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(init.headers || {}) },
+    ...init
+  });
+  let data: any = null;
+  try { data = await res.json(); } catch { /* ignore */ }
+  if (!res.ok) {
+    const msg = data?.error?.message || data?.message || `${res.status} ${res.statusText}`;
+    throw new Error(msg);
+  }
+  return data as T;
+}
+
 // Client-side cookie utilities
 function getCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
@@ -14,20 +30,14 @@ function getCookie(name: string): string | null {
 }
 
 function setCookie(name: string, value: string, options: {
-  maxAge?: number;
-  path?: string;
-  secure?: boolean;
-  sameSite?: string;
-}) {
-  if (typeof document === "undefined") return;
-  
-  let cookieString = `${name}=${value}`;
-  
-  if (options.maxAge) cookieString += `; Max-Age=${options.maxAge}`;
-  if (options.path) cookieString += `; Path=${options.path}`;
+  maxAge?: number; path?: string; secure?: boolean; sameSite?: string;
+} = {}) {
+  if (typeof document === 'undefined') return;
+  let cookieString = `${encodeURIComponent(name)}=${encodeURIComponent(value)}`;
+  if (options.maxAge !== undefined) cookieString += `; Max-Age=${options.maxAge}`;
+  cookieString += `; Path=${options.path || '/'}`;
   if (options.secure) cookieString += `; Secure`;
   if (options.sameSite) cookieString += `; SameSite=${options.sameSite}`;
-  
   document.cookie = cookieString;
 }
 
@@ -43,102 +53,53 @@ function deleteCookie(name: string, path = "/") {
  * Note: This requires your API to handle the authentication logic
  */
 export async function signupReact(
-  email: string, 
+  email: string,
   password: string,
-  apiEndpoint = "/api/auth/signup"
+  apiEndpoint = '/api/auth/signup'
 ): Promise<{ user: { id: string; email: string } }> {
-  const response = await fetch(apiEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ email, password }),
-    credentials: "include", // Important for cookies
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || "Signup failed");
-  }
-
-  return response.json();
+  return apiFetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ email, password }) });
 }
 
 /**
  * Sign in a user (client-side)
  */
 export async function signinReact(
-  email: string, 
+  email: string,
   password: string,
-  apiEndpoint = "/api/auth/signin"
+  apiEndpoint = '/api/auth/signin'
 ): Promise<{ user: { id: string; email: string } }> {
-  const response = await fetch(apiEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ email, password }),
-    credentials: "include", // Important for cookies
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || "Signin failed");
-  }
-
-  return response.json();
+  return apiFetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ email, password }) });
 }
 
 /**
  * Log out a user (client-side)
  */
-export async function logoutReact(apiEndpoint = "/api/auth/logout"): Promise<{ message: string }> {
-  const response = await fetch(apiEndpoint, {
-    method: "POST",
-    credentials: "include", // Important for cookies
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || "Logout failed");
-  }
-
-  // Also clear the cookie on client side as backup
-  deleteCookie(authConfig.cookieName);
-
-  return response.json();
+export async function logoutReact(apiEndpoint = '/api/auth/logout'): Promise<{ message: string }> {
+  const result = await apiFetch<{ message: string }>(apiEndpoint, { method: 'POST' });
+  deleteCookie(authConfig.cookieName); // local fallback
+  return result;
 }
 
 /**
  * Get current user (client-side)
  */
 export async function getCurrentUserReact(
-  apiEndpoint = "/api/auth/me"
+  apiEndpoint = '/api/auth/me'
 ): Promise<{ id: string; email: string; createdAt?: Date } | null> {
   try {
-    const response = await fetch(apiEndpoint, {
-      credentials: "include", // Important for cookies
-    });
-
-    if (!response.ok) {
-      if (response.status === 401) return null;
-      throw new Error("Failed to get current user");
-    }
-
-    const data = await response.json();
+    const data = await apiFetch<any>(apiEndpoint, { method: 'GET' });
     return data.user || null;
-  } catch (error) {
-    console.error("Get current user error:", error);
-    return null;
+  } catch (e: any) {
+    if (e.message?.toLowerCase().includes('unauthorized') || e.message === '401 Unauthorized') return null;
+    return null; // silent fail
   }
 }
 
 /**
  * Check if user is authenticated (client-side)
  */
-export async function isAuthenticatedReact(apiEndpoint = "/api/auth/me"): Promise<boolean> {
-  const user = await getCurrentUserReact(apiEndpoint);
-  return user !== null;
+export async function isAuthenticatedReact(apiEndpoint = '/api/auth/me'): Promise<boolean> {
+  return (await getCurrentUserReact(apiEndpoint)) !== null;
 }
 
 /**
@@ -153,9 +114,7 @@ export function getAuthToken(): string | null {
  * Check if there's an auth token in cookies (client-side)
  * This is a quick check without API call, but doesn't validate the token
  */
-export function hasAuthToken(): boolean {
-  return getAuthToken() !== null;
-}
+export function hasAuthToken(): boolean { return getAuthToken() !== null; }
 
 // React Hook for authentication token
 // Note: This is a conceptual implementation - actual React hooks would be imported from 'react'
@@ -163,7 +122,7 @@ export function createUseAuthToken() {
   return function useAuthToken() {
     // This would use React.useState and React.useEffect in a real React environment
     // For now, we provide the implementation structure
-    return getAuthToken();
+  return getAuthToken();
   };
 }
 

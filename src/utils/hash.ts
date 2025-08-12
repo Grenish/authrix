@@ -74,8 +74,11 @@ class SecurityConfig {
     this.BCRYPT_ROUNDS = this.validateBcryptRounds(envRounds);
 
     // Load pepper from secure storage
-    this.PEPPER =
-      process.env.AUTHRIX_PASSWORD_PEPPER || this.generateDefaultPepper();
+    const pepper = process.env.AUTHRIX_PASSWORD_PEPPER;
+    if (!pepper && process.env.NODE_ENV === 'production') {
+      throw new Error('AUTHRIX_PASSWORD_PEPPER must be configured in production');
+    }
+    this.PEPPER = pepper || this.generateDefaultPepper();
 
     // Validate configuration on startup
     this.validateConfiguration();

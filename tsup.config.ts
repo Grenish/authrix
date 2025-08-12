@@ -24,7 +24,8 @@ export default defineConfig({
     clean: true,
     outDir: "dist",
     target: "node18",
-    splitting: true, // Enable code splitting for better tree-shaking
+    // Re-enable code splitting so consumers only load what they import; we'll reduce file count via other means
+    splitting: true,
     minify: true, // Enable minification
     treeshake: true, // Enable tree-shaking
     external: [

@@ -53,10 +53,7 @@ export async function signupUniversal(email: string, password: string): Promise<
   try {
     return await signupCore(email, password);
   } catch (error) {
-    return {
-      success: false,
-      error: { message: error instanceof Error ? error.message : 'Unknown error' }
-    };
+    return errorResponse(error, 'Signup failed');
   }
 }
 
@@ -68,10 +65,7 @@ export async function signinUniversal(email: string, password: string): Promise<
   try {
     return await signinCore(email, password);
   } catch (error) {
-    return {
-      success: false,
-      error: { message: error instanceof Error ? error.message : 'Unknown error' }
-    };
+    return errorResponse(error, 'Signin failed');
   }
 }
 
@@ -134,15 +128,13 @@ export async function isTokenValidUniversal(token: string | null): Promise<boole
  * Utility to create a standard cookie string
  */
 export function createCookieString(name: string, value: string, options: CookieOptions): string {
-  let cookieString = `${name}=${value}`;
-  
-  if (options.maxAge) cookieString += `; Max-Age=${options.maxAge}`;
+  let cookieString = `${encodeURIComponent(name)}=${encodeURIComponent(value)}`;
+  if (options.maxAge !== undefined) cookieString += `; Max-Age=${options.maxAge}`;
   if (options.expires) cookieString += `; Expires=${options.expires.toUTCString()}`;
-  if (options.path) cookieString += `; Path=${options.path}`;
+  cookieString += `; Path=${options.path || '/'}`;
   if (options.secure) cookieString += `; Secure`;
   if (options.httpOnly) cookieString += `; HttpOnly`;
   if (options.sameSite) cookieString += `; SameSite=${options.sameSite}`;
-  
   return cookieString;
 }
 
@@ -151,17 +143,16 @@ export function createCookieString(name: string, value: string, options: CookieO
  */
 export function parseCookies(cookieHeader: string): Record<string, string> {
   const cookies: Record<string, string> = {};
-  
   if (!cookieHeader) return cookies;
-  
-  cookieHeader.split(';').forEach(cookie => {
-    const [name, ...rest] = cookie.split('=');
-    const value = rest.join('=');
-    if (name && value) {
-      cookies[name.trim()] = value.trim();
-    }
+  cookieHeader.split(';').forEach(raw => {
+    const part = raw.trim();
+    if (!part) return;
+    const eqIndex = part.indexOf('=');
+    if (eqIndex === -1) return;
+    const name = decodeURIComponent(part.slice(0, eqIndex).trim());
+    const value = decodeURIComponent(part.slice(eqIndex + 1).trim());
+    if (name) cookies[name] = value;
   });
-  
   return cookies;
 }
 
@@ -177,24 +168,13 @@ export function getAuthTokenFromCookies(cookies: Record<string, string>): string
  * Returns both validation result and user data
  */
 export async function validateAuth(token: string | null) {
+  if (!token) return { isValid: false, user: null, error: 'No token provided' };
   try {
-    if (!token) {
-      return { isValid: false, user: null, error: "No token provided" };
-    }
-
     const user = await getCurrentUserFromToken(token);
-    
-    if (!user) {
-      return { isValid: false, user: null, error: "Invalid or expired token" };
-    }
-
+    if (!user) return { isValid: false, user: null, error: 'Invalid or expired token' };
     return { isValid: true, user, error: null };
   } catch (error) {
-    return { 
-      isValid: false, 
-      user: null, 
-      error: error instanceof Error ? error.message : "Authentication failed" 
-    };
+    return { isValid: false, user: null, error: error instanceof Error ? error.message : 'Authentication failed' };
   }
 }
 
@@ -212,20 +192,30 @@ export function createAuthHeaders(token: string): Record<string, string> {
  * Utility for framework-specific implementations to handle errors consistently
  */
 export function createAuthError(message: string, status: number = 401) {
-  return {
-    success: false,
-    error: { message },
-    status
-  };
+  return { success: false, error: { message }, status };
 }
 
 /**
  * Utility for framework-specific implementations to handle success responses consistently
  */
 export function createAuthSuccess<T>(data: T, status: number = 200) {
+  return { success: true, data, status };
+}
+
+// Internal reusable error formatter
+function errorResponse(error: unknown, fallback: string): AuthErrorResult {
   return {
-    success: true,
-    data,
-    status
+    success: false,
+    error: { message: error instanceof Error ? error.message : fallback }
   };
 }
+
+// Collection export for convenience (tree-shakable)
+export const universalAuth = {
+  signup: signupUniversal,
+  signin: signinUniversal,
+  logout: logoutUniversal,
+  currentUser: getCurrentUserUniversal,
+  validate: validateAuth,
+  isTokenValid: isTokenValidUniversal
+};

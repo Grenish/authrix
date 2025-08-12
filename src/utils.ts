@@ -12,3 +12,13 @@ export {
 
 // Response helpers
 export { sendSuccess, sendError } from "./utils/response";
+
+// Hash / password utilities (security helpers)
+export {
+  hashPassword,
+  verifyPassword,
+  verifyAndCheckRehash,
+  validatePassword,
+  generateSecurePassword,
+  needsRehash
+} from './utils/hash';

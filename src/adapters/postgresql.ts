@@ -218,6 +218,9 @@ export const postgresqlAdapter: AuthDbAdapter = {
       return null;
     }
   },
+  async getUserByEmail(email: string): Promise<AuthUser | null> {
+    return this.findUserByEmail(email);
+  },
 
   async findUserById(id: string): Promise<AuthUser | null> {
     try {

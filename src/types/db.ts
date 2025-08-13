@@ -32,7 +32,10 @@ export interface TwoFactorCode {
 }
 
 export interface AuthDbAdapter {
+  // Core required methods
   findUserByEmail(email: string): Promise<AuthUser | null>;
+  // Alias for developer ergonomics (some docs reference getUserByEmail)
+  getUserByEmail?(email: string): Promise<AuthUser | null>;
   findUserById(id: string): Promise<AuthUser | null>;
   findUserByUsername(username: string): Promise<AuthUser | null>;
   createUser(data: {
@@ -44,20 +47,13 @@ export interface AuthDbAdapter {
     fullName?: string;
     profilePicture?: string;
   }): Promise<AuthUser>;
+  // Make updateUser strongly recommended (used for password rehash, timestamps)
+  updateUser?(id: string, data: Partial<AuthUser>): Promise<AuthUser>;
 
   // Optional 2FA methods - implement these for 2FA support
-  updateUser?(id: string, data: Partial<AuthUser>): Promise<AuthUser>;
   storeTwoFactorCode?(code: TwoFactorCode): Promise<void>;
   getTwoFactorCode?(codeId: string): Promise<TwoFactorCode | null>;
-  updateTwoFactorCode?(
-    codeId: string,
-    updates: Partial<TwoFactorCode>
-  ): Promise<void>;
-  getUserTwoFactorCodes?(
-    userId: string,
-    type?: string
-  ): Promise<TwoFactorCode[]>;
+  updateTwoFactorCode?(codeId: string, updates: Partial<TwoFactorCode>): Promise<void>;
+  getUserTwoFactorCodes?(userId: string, type?: string): Promise<TwoFactorCode[]>;
   cleanupExpiredTwoFactorCodes?(): Promise<number>;
-
-  // TODO (for later): extend later for sessions, roles, etc.
 }

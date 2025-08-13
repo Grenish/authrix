@@ -226,14 +226,15 @@ class CookieUtils {
       httpOnly?: boolean;
     } = {}
   ): string {
+    const normalized = this.normalizeOptions(options);
     const parts = [`${name}=${value}`];
 
-    if (options.httpOnly !== false) parts.push('HttpOnly');
-    if (options.path) parts.push(`Path=${options.path}`);
-    if (options.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`);
-    if (options.expires) parts.push(`Expires=${options.expires.toUTCString()}`);
-    if (options.sameSite) parts.push(`SameSite=${options.sameSite}`);
-    if (options.secure) parts.push('Secure');
+    if (normalized.httpOnly) parts.push('HttpOnly');
+    if (normalized.path) parts.push(`Path=${normalized.path}`);
+    if (normalized.maxAge !== undefined) parts.push(`Max-Age=${normalized.maxAge}`);
+    if (normalized.expires) parts.push(`Expires=${normalized.expires.toUTCString()}`);
+    if (normalized.sameSite) parts.push(`SameSite=${normalized.sameSite}`);
+    if (normalized.secure) parts.push('Secure');
 
     return parts.join('; ');
   }
@@ -244,6 +245,25 @@ class CookieUtils {
       path: '/',
       httpOnly: true
     });
+  }
+
+  /**
+   * Normalize cookie options enforcing secure defaults:
+   *  - httpOnly defaults to true
+   *  - sameSite defaults to 'lax'
+   *  - secure defaults to true in production
+   *  - if sameSite === 'none', force secure true (browser requirement)
+   *  - path defaults to '/'
+   */
+  private static normalizeOptions(opts: any = {}) {
+    const isProd = process.env.NODE_ENV === 'production';
+    const normalized: any = { ...opts };
+    if (normalized.httpOnly !== false) normalized.httpOnly = true;
+    if (!normalized.path) normalized.path = '/';
+    if (!normalized.sameSite) normalized.sameSite = 'lax';
+    if (normalized.sameSite === 'none') normalized.secure = true; // Required by modern browsers
+    if (typeof normalized.secure === 'undefined') normalized.secure = isProd;
+    return normalized;
   }
 }
 
@@ -526,21 +546,30 @@ export function withAuth<T extends Record<string, any>, U extends Record<string,
 export async function signupNext(email: string, password: string, res?: any) {
   const result = await signupCore(email, password);
   const ok = await applyAuthCookie(result.token, result.cookieOptions, { res });
-  if (!ok) throw new Error('Unable to set authentication cookie. Pass a response object for Pages Router or call from App Router context.');
+  if (!ok) {
+    const env = ModuleLoader.getEnvironmentInfo();
+    throw new Error(`Unable to set authentication cookie. Context=${env.context}; nextAvailable=${env.isNextJsAvailable}. If using App Router make sure this runs server-side (Route Handler / Server Component). For Pages Router, pass (res). You can also manually set: cookies().set(${CookieUtils.getCookieName()}, <token>, { httpOnly: true, sameSite: 'lax', secure: ${process.env.NODE_ENV === 'production'} })`);
+  }
   return result.user;
 }
 
 export async function signinNext(email: string, password: string, res?: any) {
   const result = await signinCore(email, password);
   const ok = await applyAuthCookie(result.token, result.cookieOptions, { res });
-  if (!ok) throw new Error('Unable to set authentication cookie. Pass a response object for Pages Router or call from App Router context.');
+  if (!ok) {
+    const env = ModuleLoader.getEnvironmentInfo();
+    throw new Error(`Unable to set authentication cookie. Context=${env.context}; nextAvailable=${env.isNextJsAvailable}. See signupNext() guidance for setting manually.`);
+  }
   return result.user;
 }
 
 export async function logoutNext(res?: any) {
   const result = logoutCore();
   const ok = await clearAuthCookie({ res });
-  if (!ok) throw new Error('Unable to clear authentication cookie. Pass a response object for Pages Router or call from App Router context.');
+  if (!ok) {
+    const env = ModuleLoader.getEnvironmentInfo();
+    throw new Error(`Unable to clear authentication cookie. Context=${env.context}. For Pages Router pass (res). For App Router ensure server-side execution.`);
+  }
   return { message: result.message };
 }
 

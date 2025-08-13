@@ -8,23 +8,8 @@
 //   Adapters: import { mongoAdapter } from 'authrix/adapters/mongo'
 //   Utils: import { AuthrixError } from 'authrix/utils'
 
-// --- Core Authentication Functions ---
-export { signup, signupCore } from "./core/signup";
-export { signin, signinCore } from "./core/signin";
-export { logout, logoutCore } from "./core/logout";
-export { getCurrentUser, getCurrentUserFromToken, isAuthenticated, isTokenValid } from "./core/session";
-// 2FA / verification core utilities (new export)
-export {
-	generateTwoFactorCode,
-	verifyTwoFactorCode,
-	initiateEmailVerification,
-	initiateSMSVerification,
-	sendVerificationEmail,
-	sendVerificationSMS,
-	getUserTwoFactorCodes,
-	cleanupExpiredCodes,
-	EmailServiceRegistry
-} from './core/twoFactor';
+// Legacy flat action/session exports removed – use auth namespace instead.
+// Advanced / two-factor utilities intentionally withheld pending new advanced entrypoint.
 
 // --- Configuration ---
 export { initAuth, authConfig, isAuthrixInitialized, getAuthrixStatus } from "./config/index";
@@ -50,3 +35,22 @@ export { logger, createLogger, reconfigureLogger } from './utils/logger';
 export type { AuthDbAdapter, AuthUser } from "./types/db";
 export type { AuthenticatedRequest } from "./middleware/authMiddleware";
 export type { TokenPayload } from "./tokens/verifyToken";
+export { auth, type AuthNamespace, type AuthActionResult } from './auth';
+
+// Transitional deprecated exports (will be removed in a future minor release)
+import { warnDep } from './internal/deprecations';
+import { signupCore } from './core/signup';
+import { signinCore } from './core/signin';
+import { logoutCore } from './core/logout';
+
+function deprecated<T extends (...args: any[]) => any>(fn: T, oldName: string, hint: string): T {
+	return ((...args: any[]) => {
+		warnDep(oldName, hint);
+		return fn(...args);
+	}) as T;
+}
+
+// Re-export with deprecation wrappers
+export const signupCoreDeprecated = deprecated(signupCore, 'signupCore (root export)', 'auth.core.signup via authrix/advanced');
+export const signinCoreDeprecated = deprecated(signinCore, 'signinCore (root export)', 'auth.core.signin via authrix/advanced');
+export const logoutCoreDeprecated = deprecated(logoutCore, 'logoutCore (root export)', 'auth.core.logout via authrix/advanced');

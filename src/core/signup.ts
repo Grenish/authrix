@@ -143,7 +143,9 @@ export async function signupCore(
 
   // Enhanced password validation (unless skipped for backward compatibility)
   if (!skipPasswordValidation) {
-    const passwordValidation = validatePassword(password);
+    // Provide email local-part as user info to detect inclusion; do not penalize entropy unfairly otherwise
+    const userInfo = [normalizedEmail.split('@')[0]];
+    const passwordValidation = validatePassword(password, {}, userInfo);
     if (!passwordValidation.isValid) {
       throw new BadRequestError(`Password validation failed: ${passwordValidation.errors.join(', ')}`);
     }

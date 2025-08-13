@@ -13,6 +13,18 @@ export { signup, signupCore } from "./core/signup";
 export { signin, signinCore } from "./core/signin";
 export { logout, logoutCore } from "./core/logout";
 export { getCurrentUser, getCurrentUserFromToken, isAuthenticated, isTokenValid } from "./core/session";
+// 2FA / verification core utilities (new export)
+export {
+	generateTwoFactorCode,
+	verifyTwoFactorCode,
+	initiateEmailVerification,
+	initiateSMSVerification,
+	sendVerificationEmail,
+	sendVerificationSMS,
+	getUserTwoFactorCodes,
+	cleanupExpiredCodes,
+	EmailServiceRegistry
+} from './core/twoFactor';
 
 // --- Configuration ---
 export { initAuth, authConfig, isAuthrixInitialized, getAuthrixStatus } from "./config/index";
@@ -30,6 +42,9 @@ export {
 	generateSecurePassword,
 	needsRehash
 } from './utils/hash';
+
+// Logger (new public utility; safe early import to avoid circular init)
+export { logger, createLogger, reconfigureLogger } from './utils/logger';
 
 // --- Core Types ---
 export type { AuthDbAdapter, AuthUser } from "./types/db";

@@ -1,4 +1,5 @@
 import { authConfig } from "../config";
+import { logger } from "../utils/logger";
 import { hashPassword, validatePassword } from "../utils/hash";
 import { createToken } from "../tokens/createToken";
 import { BadRequestError, ConflictError } from "../utils/errors";
@@ -17,6 +18,7 @@ export interface SignupOptions {
   lastName?: string;
   fullName?: string;
   profilePicture?: string;
+  requesterIp?: string; // P2: incorporate IP into rate limiting identifier
 }
 
 export interface SignupResult {
@@ -122,6 +124,7 @@ export async function signupCore(
   lastName,
   fullName,
   profilePicture,
+  requesterIp,
   } = options;
 
   // Input validation
@@ -157,7 +160,8 @@ export async function signupCore(
   }
 
   // Rate limiting check
-  if (!checkSignupRateLimit(normalizedEmail)) {
+  const rateLimitId = requesterIp ? `${normalizedEmail}|${requesterIp}` : normalizedEmail;
+  if (!checkSignupRateLimit(rateLimitId)) {
     throw new BadRequestError("Too many signup attempts. Please try again later.");
   }
 
@@ -248,6 +252,10 @@ export async function signupCore(
       if (user.profilePicture) userResponse.profilePicture = user.profilePicture;
       if (typeof user.emailVerified === 'boolean') {
         userResponse.emailVerified = user.emailVerified;
+        // P2: ensure emailVerifiedAt is present when verified
+        if (user.emailVerified && user.emailVerifiedAt instanceof Date) {
+          (userResponse as any).emailVerifiedAt = user.emailVerifiedAt;
+        }
       }
     }
 
@@ -256,7 +264,7 @@ export async function signupCore(
       token,
       cookieOptions: {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+  secure: authConfig.forceSecureCookies || process.env.NODE_ENV === "production",
         maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
         sameSite: "lax" as const,
         path: "/",
@@ -267,12 +275,10 @@ export async function signupCore(
 
   } catch (error) {
     // Log failed attempt for monitoring
-    if (process.env.NODE_ENV === 'development') {
-      console.debug('[AUTHRIX] Signup failed:', {
-        email: normalizedEmail,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
+    logger.debug('Signup failed', {
+      email: normalizedEmail,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
 
     // Re-throw the error to be handled by the caller
     throw error;
@@ -326,7 +332,7 @@ export async function validateSignupData(email: string, password: string): Promi
           }
         } catch (error) {
           // Don't fail validation if database check fails
-          console.warn('[AUTHRIX] Could not check email existence during validation:', error);
+          logger.structuredWarn({ category: 'signup', action: 'email-existence-check', outcome: 'failed', message: 'Could not check email existence', error: error instanceof Error ? error.message : String(error) });
         }
       }
     }

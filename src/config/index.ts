@@ -8,6 +8,10 @@ class AuthConfigSingleton {
   private _jwtSecret: string = "";
   private _db: AuthDbAdapter | null = null;
   private _cookieName: string = "auth_token";
+  private _forceSecureCookies: boolean = false; // P2: allow forcing secure cookies in dev
+  private _sessionMaxAgeMs: number = 1000 * 60 * 60 * 24 * 7; // default 7d
+  private _rollingSessionEnabled: boolean = false;
+  private _rollingSessionThresholdSeconds: number = 60 * 60 * 24; // 24h remaining triggers refresh by default
 
   private constructor() {}
 
@@ -43,16 +47,73 @@ class AuthConfigSingleton {
     this._cookieName = value;
   }
 
+  public get forceSecureCookies(): boolean {
+    return this._forceSecureCookies;
+  }
+
+  public set forceSecureCookies(value: boolean) {
+    this._forceSecureCookies = value;
+  }
+
+  public get sessionMaxAgeMs(): number {
+    return this._sessionMaxAgeMs;
+  }
+
+  public set sessionMaxAgeMs(value: number) {
+    if (value > 0) this._sessionMaxAgeMs = value;
+  }
+
+  public get rollingSessionEnabled(): boolean {
+    return this._rollingSessionEnabled;
+  }
+
+  public set rollingSessionEnabled(value: boolean) {
+    this._rollingSessionEnabled = value;
+  }
+
+  public get rollingSessionThresholdSeconds(): number {
+    return this._rollingSessionThresholdSeconds;
+  }
+
+  public set rollingSessionThresholdSeconds(value: number) {
+    if (value > 0) this._rollingSessionThresholdSeconds = value;
+  }
+
   public init(config: {
     jwtSecret: string;
     db: AuthDbAdapter;
     cookieName?: string;
+    forceSecureCookies?: boolean;
+    session?: {
+      maxAgeMs?: number;
+      rolling?: {
+        enabled?: boolean;
+        thresholdSeconds?: number;
+      }
+    };
   }) {
     this._jwtSecret = config.jwtSecret;
     this._db = config.db;
     
     if (config.cookieName) {
       this._cookieName = config.cookieName;
+    }
+    if (typeof config.forceSecureCookies === 'boolean') {
+      this._forceSecureCookies = config.forceSecureCookies;
+    }
+
+    if (config.session) {
+      if (typeof config.session.maxAgeMs === 'number') {
+        this._sessionMaxAgeMs = config.session.maxAgeMs;
+      }
+      if (config.session.rolling) {
+        if (typeof config.session.rolling.enabled === 'boolean') {
+          this._rollingSessionEnabled = config.session.rolling.enabled;
+        }
+        if (typeof config.session.rolling.thresholdSeconds === 'number') {
+          this._rollingSessionThresholdSeconds = config.session.rolling.thresholdSeconds;
+        }
+      }
     }
   }
 }
@@ -79,6 +140,30 @@ export const authConfig = {
   },
   set cookieName(value: string) {
     authConfigInstance.cookieName = value;
+  },
+  get forceSecureCookies() {
+    return authConfigInstance.forceSecureCookies;
+  },
+  set forceSecureCookies(value: boolean) {
+    authConfigInstance.forceSecureCookies = value;
+  },
+  get sessionMaxAgeMs() {
+    return authConfigInstance.sessionMaxAgeMs;
+  },
+  set sessionMaxAgeMs(value: number) {
+    authConfigInstance.sessionMaxAgeMs = value;
+  },
+  get rollingSessionEnabled() {
+    return authConfigInstance.rollingSessionEnabled;
+  },
+  set rollingSessionEnabled(value: boolean) {
+    authConfigInstance.rollingSessionEnabled = value;
+  },
+  get rollingSessionThresholdSeconds() {
+    return authConfigInstance.rollingSessionThresholdSeconds;
+  },
+  set rollingSessionThresholdSeconds(value: number) {
+    authConfigInstance.rollingSessionThresholdSeconds = value;
   }
 };
 
@@ -86,6 +171,14 @@ export function initAuth(config: {
   jwtSecret: string;
   db: AuthDbAdapter;
   cookieName?: string;
+  forceSecureCookies?: boolean;
+  session?: {
+    maxAgeMs?: number;
+    rolling?: {
+      enabled?: boolean;
+      thresholdSeconds?: number;
+    }
+  };
 }) {
   authConfigInstance.init(config);
 }

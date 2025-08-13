@@ -1,27 +1,7 @@
 // Next.js specific entry point - All functions
 export {
   // Recommended production-ready functions (use these for most cases)
-  signupNext,
-  signinNext,
-  logoutNext,
-  getCurrentUserNext,
-  isAuthenticatedNext,
-  // Flexible functions that work in both App Router and Pages Router
-  signupNextFlexible,
-  signinNextFlexible,
-  getCurrentUserNextFlexible,
-  // App Router specific
-  signupNextApp,
-  signinNextApp,
-  logoutNextApp,
-  getCurrentUserNextApp,
-  isAuthenticatedNextApp,
-  // Pages Router specific
-  signupNextPages,
-  signinNextPages,
-  logoutNextPages,
-  getCurrentUserNextPages,
-  isAuthenticatedNextPages,
+  // (Action exports removed; use auth.actions.*)
   // Middleware functions
   checkAuthMiddleware,
   checkAuthMiddlewareSecure,

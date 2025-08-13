@@ -1,4 +1,5 @@
 import { authConfig } from "../config";
+import { logger } from "../utils/logger";
 import { createToken } from "../tokens/createToken";
 import { verifyPassword, verifyAndCheckRehash } from "../utils/hash";
 import { BadRequestError, UnauthorizedError, ForbiddenError } from "../utils/errors";
@@ -11,6 +12,7 @@ export interface SigninOptions {
   includeUserProfile?: boolean;
   maxLoginAttempts?: number;
   lockoutDuration?: number; // in minutes
+  requesterIp?: string; // P2: IP dimension for rate limiting
 }
 
 export interface SigninResult {
@@ -137,7 +139,8 @@ export async function signinCore(
   }
 
   // Check rate limiting
-  const rateLimitCheck = checkLoginRateLimit(normalizedEmail, maxLoginAttempts, lockoutDuration);
+  const rateLimitId = options.requesterIp ? `${normalizedEmail}|${options.requesterIp}` : normalizedEmail;
+  const rateLimitCheck = checkLoginRateLimit(rateLimitId, maxLoginAttempts, lockoutDuration);
   if (!rateLimitCheck.allowed) {
     const lockoutMessage = rateLimitCheck.lockedUntil
       ? `Account temporarily locked. Try again after ${rateLimitCheck.lockedUntil.toLocaleTimeString()}`
@@ -173,6 +176,11 @@ export async function signinCore(
       }
     } catch (e) {
       // Fallback to legacy verify if newer path misbehaves
+      if (!(e instanceof Error)) {
+  logger.structuredWarn({ category: 'auth', action: 'password-verify-fallback', message: 'Password verify fallback (unknown error type)' });
+      } else {
+  logger.structuredWarn({ category: 'auth', action: 'password-verify-fallback', message: 'Password verify fallback', error: e instanceof Error ? e.message : String(e) });
+      }
       const legacyValid = await verifyPassword(password, user.password, { identifier: normalizedEmail });
       isValidPassword = legacyValid;
     }
@@ -214,12 +222,12 @@ export async function signinCore(
           updatedUser = await db.updateUser(user.id, updatePayload) || user;
         }
       } catch (error) {
-        console.warn('[AUTHRIX] Failed to post-auth update (login timestamp / hash upgrade):', error);
+  logger.structuredWarn({ category: 'auth', action: 'post-auth-update', outcome: 'failed', message: 'Failed post-auth update', error: error instanceof Error ? error.message : String(error) });
         // Don't fail the login for this
       }
     }
 
-    // Create token payload
+    // Create token payload (iat & exp automatically handled by JWT lib; we also allow custom maxAge via config)
     const tokenPayload: any = {
       id: user.id,
       email: user.email
@@ -233,9 +241,10 @@ export async function signinCore(
     const token = createToken(tokenPayload);
 
     // Determine cookie max age
-    const maxAge = rememberMe
+    const baseMaxAge = rememberMe
       ? 1000 * 60 * 60 * 24 * 30 // 30 days for remember me
-      : 1000 * 60 * 60 * 24 * 7;  // 7 days default
+      : authConfig.sessionMaxAgeMs; // configurable default (7d by default)
+    const maxAge = baseMaxAge;
 
     // Build user response object
     const userResponse: SigninResult['user'] = {
@@ -259,7 +268,7 @@ export async function signinCore(
       token,
       cookieOptions: {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+  secure: authConfig.forceSecureCookies || process.env.NODE_ENV === "production",
         maxAge,
         sameSite: "lax" as const,
         path: "/",
@@ -270,13 +279,11 @@ export async function signinCore(
 
   } catch (error) {
     // Log failed attempt for monitoring
-    if (process.env.NODE_ENV === 'development') {
-      console.debug('[AUTHRIX] Signin failed:', {
-        email: normalizedEmail,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        attemptsRemaining: rateLimitCheck.attemptsRemaining
-      });
-    }
+    logger.debug('Signin failed', {
+      email: normalizedEmail,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      attemptsRemaining: rateLimitCheck.attemptsRemaining
+    });
 
     // Re-throw the error to be handled by the caller
     throw error;

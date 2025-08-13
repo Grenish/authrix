@@ -6,6 +6,20 @@ import { logoutCore } from "../core/logout";
 import { getCurrentUserFromToken, isTokenValid } from "../core/session";
 import { authConfig } from "../config";
 
+// Public user shape exposed in success results (kept minimal & stable)
+export interface PublicUser {
+  id: string;
+  email: string;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  fullName?: string;
+  profilePicture?: string;
+  emailVerified?: boolean;
+  createdAt?: Date;
+  lastLoginAt?: Date;
+}
+
 export interface CookieOptions {
   httpOnly?: boolean;
   secure?: boolean;
@@ -15,10 +29,15 @@ export interface CookieOptions {
   expires?: Date;
 }
 
-export interface AuthResult {
-  user: { id: string; email: string };
+// Success shape now explicitly discriminated with success: true to improve TS DX.
+// Backwards compatibility: token & cookieOptions retained; previously code accessed fields directly.
+export interface AuthSuccessResult {
+  success: true;
+  user: PublicUser; // enriched user object from core layer (subset kept safe)
   token: string;
   cookieOptions: CookieOptions;
+  isNewUser?: boolean;
+  requiresEmailVerification?: boolean;
 }
 
 export interface AuthErrorResult {
@@ -26,7 +45,7 @@ export interface AuthErrorResult {
   error: { message: string };
 }
 
-export type AuthResponse = AuthResult | AuthErrorResult;
+export type AuthResponse = AuthSuccessResult | AuthErrorResult;
 
 export interface UniversalLogoutResult {
   success: boolean;
@@ -51,7 +70,15 @@ export interface UniversalLogoutResult {
  */
 export async function signupUniversal(email: string, password: string): Promise<AuthResponse> {
   try {
-    return await signupCore(email, password);
+    const result = await signupCore(email, password);
+    return {
+      success: true,
+      user: result.user,
+      token: result.token,
+      cookieOptions: result.cookieOptions,
+      isNewUser: result.isNewUser,
+      requiresEmailVerification: result.requiresEmailVerification,
+    };
   } catch (error) {
     return errorResponse(error, 'Signup failed');
   }
@@ -63,7 +90,14 @@ export async function signupUniversal(email: string, password: string): Promise<
  */
 export async function signinUniversal(email: string, password: string): Promise<AuthResponse> {
   try {
-    return await signinCore(email, password);
+    const result: any = await signinCore(email, password);
+    return {
+      success: true,
+      user: result.user,
+      token: result.token,
+      cookieOptions: result.cookieOptions,
+      isNewUser: result.isFirstLogin, // mapping for consistency (optional)
+    };
   } catch (error) {
     return errorResponse(error, 'Signin failed');
   }

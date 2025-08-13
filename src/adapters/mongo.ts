@@ -71,6 +71,15 @@ class MongoConnection {
       );
     }
 
+    // Auto-tune Atlas / TLS friendly defaults when using mongodb+srv unless user overrides
+    const isSrv = uri.startsWith('mongodb+srv://');
+    if (isSrv) {
+      process.env.MONGO_MAX_POOL_SIZE = process.env.MONGO_MAX_POOL_SIZE || '10';
+      process.env.MONGO_MIN_POOL_SIZE = process.env.MONGO_MIN_POOL_SIZE || '2';
+      process.env.MONGO_SOCKET_TIMEOUT = process.env.MONGO_SOCKET_TIMEOUT || '30000';
+      process.env.MONGO_SERVER_SELECTION_TIMEOUT = process.env.MONGO_SERVER_SELECTION_TIMEOUT || '5000';
+    }
+
     this.config = {
       uri,
       dbName,
@@ -107,11 +116,17 @@ class MongoConnection {
       const config = this.loadConfig();
 
       // Create client with optimized settings
+      const tlsOptions: any = {};
+      if (config.uri.startsWith('mongodb+srv://')) {
+        // Let driver manage SRV records; optionally enable retryable writes if not set
+        tlsOptions.retryWrites = true;
+      }
       this.client = new MongoClient(config.uri, {
         maxPoolSize: config.options?.maxPoolSize,
         minPoolSize: config.options?.minPoolSize,
         socketTimeoutMS: config.options?.socketTimeoutMS,
         serverSelectionTimeoutMS: config.options?.serverSelectionTimeoutMS,
+        ...tlsOptions
       });
 
       await this.client.connect();
@@ -243,6 +258,10 @@ export const mongoAdapter: AuthDbAdapter = {
     );
 
     return user && user._id ? mongoUserToAuthUser(user as MongoUser & { _id: ObjectId }) : null;
+  },
+  // Alias method for docs compatibility
+  async getUserByEmail(email: string): Promise<AuthUser | null> {
+    return this.findUserByEmail(email);
   },
 
   async findUserById(id: string): Promise<AuthUser | null> {

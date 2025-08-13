@@ -47,6 +47,12 @@ export class AuthrixLogger {
   debug(...args: any[]) { if (this.shouldLog('debug')) console.debug(...this.fmt(args)); }
   info(...args: any[])  { if (this.shouldLog('info'))  console.info(...this.fmt(args)); }
   warn(...args: any[])  { if (this.shouldLog('warn'))  console.warn(...this.fmt(args)); }
+  structuredWarn(meta: { category: string; action: string; outcome?: string; message?: string; [k: string]: any }) {
+    if (!this.shouldLog('warn')) return;
+    const { category, action, outcome, message, ...rest } = meta;
+    const base = { category, action, outcome: outcome || 'unknown', ...rest };
+    console.warn(...this.fmt([message || `${category}:${action}`, base]));
+  }
   error(...args: any[]) { if (this.shouldLog('error')) console.error(...this.fmt(args)); }
 }
 

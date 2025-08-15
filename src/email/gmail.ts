@@ -1,4 +1,5 @@
 import { EmailService } from "../core/twoFactor";
+import type { EmailServiceCapabilities } from "../types/email";
 import type { Transporter } from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 
@@ -49,6 +50,13 @@ const PERMANENT_ERROR_PATTERNS = [
  * Optimized Gmail SMTP Email Service
  */
 export class GmailEmailService implements EmailService {
+    public readonly capabilities: EmailServiceCapabilities = {
+        templates: true,
+        headers: true,
+        tracking: false,
+        tags: false,
+        replyTo: false
+    };
     private transporter?: Transporter;
     private config: Required<GmailConfig>;
     private initPromise?: Promise<void>;
@@ -65,15 +73,15 @@ export class GmailEmailService implements EmailService {
         const appPassword = config?.appPassword || process.env.GMAIL_APP_PASSWORD || '';
         const fromName = config?.fromName || process.env.GMAIL_FROM_NAME || 'Authrix';
 
-        if (!user || !appPassword) {
-            throw new Error(
-                'Gmail service requires GMAIL_USER and GMAIL_APP_PASSWORD. ' +
-                'Generate an app password at https://myaccount.google.com/apppasswords'
-            );
+        if (!user) {
+            throw new Error('GMAIL_USER is required (your Gmail address).');
+        }
+        if (!appPassword) {
+            throw new Error('GMAIL_APP_PASSWORD is required. Generate one at https://myaccount.google.com/apppasswords');
         }
 
         if (!EMAIL_REGEX.test(user)) {
-            throw new Error('GMAIL_USER must be a valid email address');
+            throw new Error('GMAIL_USER must be a valid email address (e.g., you@example.com)');
         }
 
         return {
@@ -176,11 +184,11 @@ export class GmailEmailService implements EmailService {
      */
     private validateEmailInputs(to: string, code: string): void {
         if (!to?.trim()) {
-            throw new Error('Recipient email is required');
+            throw new Error('Recipient email address is required');
         }
 
         if (!EMAIL_REGEX.test(to.trim())) {
-            throw new Error('Invalid email format');
+            throw new Error('Invalid recipient email address format');
         }
 
         if (!code?.trim()) {

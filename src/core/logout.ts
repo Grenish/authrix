@@ -4,6 +4,7 @@ export interface LogoutOptions {
   invalidateAllSessions?: boolean;
   clearRememberMe?: boolean;
   redirectUrl?: string;
+  extraClear?: string[]; // P2: user-specified additional cookies only
 }
 
 export interface LogoutResult {
@@ -30,7 +31,8 @@ export function logoutCore(options: LogoutOptions = {}): LogoutResult {
   const {
     invalidateAllSessions = false,
     clearRememberMe = true,
-    redirectUrl
+  redirectUrl,
+  extraClear = []
   } = options;
 
   const cookiesToClear = [
@@ -60,19 +62,20 @@ export function logoutCore(options: LogoutOptions = {}): LogoutResult {
     });
   }
 
-  // Add session cookies that might exist
-  const additionalCookies = ['session_id', 'csrf_token', 'refresh_token'];
-  additionalCookies.forEach(cookieName => {
-    cookiesToClear.push({
-      name: cookieName,
-      options: {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax" as const,
-        path: "/",
-        expires: new Date(0),
-      }
-    });
+  // Only clear explicitly provided extra cookies now (no hardcoded list)
+  extraClear.forEach(cookieName => {
+    if (typeof cookieName === 'string' && cookieName.trim()) {
+      cookiesToClear.push({
+        name: cookieName.trim(),
+        options: {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "lax" as const,
+          path: "/",
+          expires: new Date(0),
+        }
+      });
+    }
   });
 
   // TODO: Implement session invalidation in database

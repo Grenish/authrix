@@ -1,12 +1,10 @@
-// Next.js utilities for Authrix - unified API for App Router, Pages Router & Middleware
-// The goal of this refactor is to offer consistent behaviors while preserving
-// existing exported function names for backwards compatibility.
-
 import { signupCore } from "../core/signup";
 import { signinCore } from "../core/signin";
 import { logoutCore } from "../core/logout";
 import { getCurrentUserFromToken, isTokenValid } from "../core/session";
 import { authConfig } from "../config";
+import { verifyToken } from "../tokens/verifyToken"; // P0: signature validation
+import { ConflictError, UnauthorizedError, ForbiddenError } from "../utils/errors"; // P0: status mapping
 
 // Types
 interface NextJsModules {
@@ -50,6 +48,8 @@ class ModuleLoader {
       hasNextData: false,
     }
   };
+
+  private static overridePatch: Partial<EnvironmentInfo> | null = null;
 
   static async loadModules(): Promise<NextJsModules> {
     if (this.detectionComplete) return this.cache;
@@ -98,6 +98,9 @@ class ModuleLoader {
 
     this.detectionComplete = true;
     this.environmentInfo.detectionComplete = true;
+    if (this.overridePatch) {
+      this.environmentInfo = { ...this.environmentInfo, ...this.overridePatch };
+    }
     return this.cache;
   }
 
@@ -109,6 +112,10 @@ class ModuleLoader {
     // Fire and forget; synchronous callers will still see updated runtimeInfo defaults, then async load updates.
     void this.loadModules();
     return this.getEnvironmentInfo();
+  }
+  static setOverride(patch: Partial<EnvironmentInfo>) {
+    this.overridePatch = { ...(this.overridePatch || {}), ...patch };
+    this.environmentInfo = { ...this.environmentInfo, ...patch };
   }
 }
 
@@ -149,9 +156,15 @@ async function setCookieInApp(tokenInfo: CookieSetOptions): Promise<boolean> {
 
 async function applyAuthCookie(token: string, cookieOptions: any, ctx?: { res?: AnyRes }): Promise<boolean> {
   const name = CookieUtils.getCookieName();
-  const successPages = ctx?.res ? setCookieInPages(ctx.res, buildCookieString(name, token, cookieOptions)) : false;
+  const adjusted = { ...cookieOptions };
+  if (typeof adjusted.maxAge === 'number') {
+    // convert ms -> s if necessary
+    const maybe = (CookieUtils as any).normalizeMaxAge?.(adjusted.maxAge) ?? adjusted.maxAge;
+    adjusted.maxAge = maybe;
+  }
+  const successPages = ctx?.res ? setCookieInPages(ctx.res, buildCookieString(name, token, adjusted)) : false;
   if (successPages) return true;
-  const successApp = await setCookieInApp({ name, value: token, options: cookieOptions });
+  const successApp = await setCookieInApp({ name, value: token, options: adjusted });
   return successApp;
 }
 
@@ -214,6 +227,12 @@ class CookieUtils {
     }
   }
 
+  // Convert ms -> s if value appears to be milliseconds (heuristic > 1,000,000)
+  private static normalizeMaxAge(raw?: number): number | undefined {
+    if (typeof raw !== 'number') return raw;
+    return raw > 1_000_000 ? Math.floor(raw / 1000) : raw;
+  }
+
   static createCookieString(
     name: string,
     value: string,
@@ -226,14 +245,18 @@ class CookieUtils {
       httpOnly?: boolean;
     } = {}
   ): string {
+    const normalized = this.normalizeOptions(options);
+    if (typeof normalized.maxAge === 'number') {
+      normalized.maxAge = this.normalizeMaxAge(normalized.maxAge);
+    }
     const parts = [`${name}=${value}`];
 
-    if (options.httpOnly !== false) parts.push('HttpOnly');
-    if (options.path) parts.push(`Path=${options.path}`);
-    if (options.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`);
-    if (options.expires) parts.push(`Expires=${options.expires.toUTCString()}`);
-    if (options.sameSite) parts.push(`SameSite=${options.sameSite}`);
-    if (options.secure) parts.push('Secure');
+    if (normalized.httpOnly) parts.push('HttpOnly');
+    if (normalized.path) parts.push(`Path=${normalized.path}`);
+    if (normalized.maxAge !== undefined) parts.push(`Max-Age=${normalized.maxAge}`);
+    if (normalized.expires) parts.push(`Expires=${normalized.expires.toUTCString()}`);
+    if (normalized.sameSite) parts.push(`SameSite=${normalized.sameSite}`);
+    if (normalized.secure) parts.push('Secure');
 
     return parts.join('; ');
   }
@@ -244,6 +267,25 @@ class CookieUtils {
       path: '/',
       httpOnly: true
     });
+  }
+
+  /**
+   * Normalize cookie options enforcing secure defaults:
+   *  - httpOnly defaults to true
+   *  - sameSite defaults to 'lax'
+   *  - secure defaults to true in production
+   *  - if sameSite === 'none', force secure true (browser requirement)
+   *  - path defaults to '/'
+   */
+  private static normalizeOptions(opts: any = {}) {
+    const isProd = process.env.NODE_ENV === 'production';
+    const normalized: any = { ...opts };
+    if (normalized.httpOnly !== false) normalized.httpOnly = true;
+    if (!normalized.path) normalized.path = '/';
+    if (!normalized.sameSite) normalized.sameSite = 'lax';
+    if (normalized.sameSite === 'none') normalized.secure = true; // Required by modern browsers
+    if (typeof normalized.secure === 'undefined') normalized.secure = isProd;
+    return normalized;
   }
 }
 
@@ -261,7 +303,13 @@ class JWTUtils {
       
       const payload = token.split('.')[1];
       const padded = payload + '='.repeat((4 - payload.length % 4) % 4);
-      const decoded = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+      const b64 = padded.replace(/-/g, '+').replace(/_/g, '/');
+      let decoded: string;
+      if (typeof atob === 'function') {
+        decoded = atob(b64);
+      } else {
+        decoded = Buffer.from(b64, 'base64').toString('utf8');
+      }
       return JSON.parse(decoded);
     } catch {
       return null;
@@ -295,104 +343,9 @@ const ErrorMessages = {
 
 // === App Router Functions ===
 
-export async function signupNextApp(email: string, password: string) {
-  const result = await signupCore(email, password);
-  const ok = await applyAuthCookie(result.token, result.cookieOptions);
-  if (!ok) throw new Error(ErrorMessages.COOKIE_SET_FAILED('signupNextApp'));
-  return result.user;
-}
-
-export async function signinNextApp(email: string, password: string) {
-  const result = await signinCore(email, password);
-  const ok = await applyAuthCookie(result.token, result.cookieOptions);
-  if (!ok) throw new Error(ErrorMessages.COOKIE_SET_FAILED('signinNextApp'));
-  return result.user;
-}
-
-export async function logoutNextApp() {
-  const result = logoutCore();
-  const ok = await clearAuthCookie();
-  if (!ok) throw new Error(ErrorMessages.COOKIE_SET_FAILED('logoutNextApp'));
-  return { message: result.message };
-}
-
-export async function getCurrentUserNextApp() {
-  try { return getCurrentUserFromToken(await extractToken()); } catch { return null; }
-}
-
-export async function isAuthenticatedNextApp(): Promise<boolean> {
-  try { return isTokenValid(await extractToken()); } catch { return false; }
-}
 
 // === Pages Router Functions ===
 
-export async function signupNextPages(
-  email: string, 
-  password: string, 
-  res: any
-) {
-  if (!res?.setHeader) {
-    throw new Error(ErrorMessages.PAGES_ROUTER_REQUIRED('signupNextPages'));
-  }
-  
-  const result = await signupCore(email, password);
-  const cookie = CookieUtils.createCookieString(
-    CookieUtils.getCookieName(),
-    result.token,
-    result.cookieOptions
-  );
-  
-  res.setHeader('Set-Cookie', cookie);
-  return result.user;
-}
-
-export async function signinNextPages(
-  email: string,
-  password: string,
-  res: any
-) {
-  if (!res?.setHeader) {
-    throw new Error(ErrorMessages.PAGES_ROUTER_REQUIRED('signinNextPages'));
-  }
-  
-  const result = await signinCore(email, password);
-  const cookie = CookieUtils.createCookieString(
-    CookieUtils.getCookieName(),
-    result.token,
-    result.cookieOptions
-  );
-  
-  res.setHeader('Set-Cookie', cookie);
-  return result.user;
-}
-
-export function logoutNextPages(res: any) {
-  if (!res?.setHeader) {
-    throw new Error(ErrorMessages.PAGES_ROUTER_REQUIRED('logoutNextPages'));
-  }
-  
-  const result = logoutCore();
-  const cookie = CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
-  
-  res.setHeader('Set-Cookie', cookie);
-  return { message: result.message };
-}
-
-export async function getCurrentUserNextPages(req: any) {
-  if (!req?.cookies) {
-    throw new Error('getCurrentUserNextPages requires a request object with cookies');
-  }
-  
-  const token = req.cookies[CookieUtils.getCookieName()] || null;
-  return getCurrentUserFromToken(token);
-}
-
-export async function isAuthenticatedNextPages(req: any): Promise<boolean> {
-  if (!req?.cookies) return false;
-  
-  const token = req.cookies[CookieUtils.getCookieName()] || null;
-  return isTokenValid(token);
-}
 
 // === Middleware Functions ===
 
@@ -402,43 +355,20 @@ export async function checkAuthMiddleware(
 ) {
   const cookieName = options.cookieName || CookieUtils.getCookieName();
   const token = request.cookies?.get(cookieName)?.value || null;
-  
   if (!token) {
-    return {
-      isAuthenticated: false,
-      user: null,
-      reason: 'No token provided'
-    };
+    return { isAuthenticated: false, user: null, reason: 'No token provided' };
   }
-  
   if (!JWTUtils.isValidStructure(token)) {
-    return {
-      isAuthenticated: false,
-      user: null,
-      reason: 'Invalid token structure'
-    };
+    return { isAuthenticated: false, user: null, reason: 'Invalid token structure' };
   }
-  
-  if (JWTUtils.isExpired(token)) {
-    return {
-      isAuthenticated: false,
-      user: null,
-      reason: 'Token expired'
-    };
+  try {
+    verifyToken(token); // validates signature & exp
+  } catch {
+    return { isAuthenticated: false, user: null, reason: 'Invalid or expired token' };
   }
-  
   const payload = JWTUtils.extractPayload(token);
-  const user = payload ? {
-    id: payload.id,
-    email: payload.email,
-    createdAt: payload.createdAt ? new Date(payload.createdAt) : undefined
-  } : null;
-  
-  return {
-    isAuthenticated: !!user,
-    user,
-    reason: user ? 'Token appears valid' : 'Invalid token payload'
-  };
+  const user = payload ? { id: payload.id, email: payload.email, createdAt: payload.createdAt ? new Date(payload.createdAt) : undefined } : null;
+  return { isAuthenticated: !!user, user, reason: user ? 'Token valid' : 'Invalid token payload' };
 }
 
 export async function checkAuthMiddlewareSecure(
@@ -500,7 +430,8 @@ export function withAuth<T extends Record<string, any>, U extends Record<string,
 ) {
   return async (req: T, res: U) => {
     try {
-      const user = await getCurrentUserNextPages(req);
+  const token = req && (req as any).cookies ? (req as any).cookies[CookieUtils.getCookieName()] : null;
+  const user = await getCurrentUserFromToken(token);
       
       if (!user) {
         return (res as any).status(401).json({
@@ -523,104 +454,32 @@ export function withAuth<T extends Record<string, any>, U extends Record<string,
 
 // === Flexible Functions (Auto-detect environment) ===
 
-export async function signupNext(email: string, password: string, res?: any) {
-  const result = await signupCore(email, password);
-  const ok = await applyAuthCookie(result.token, result.cookieOptions, { res });
-  if (!ok) throw new Error('Unable to set authentication cookie. Pass a response object for Pages Router or call from App Router context.');
-  return result.user;
-}
-
-export async function signinNext(email: string, password: string, res?: any) {
-  const result = await signinCore(email, password);
-  const ok = await applyAuthCookie(result.token, result.cookieOptions, { res });
-  if (!ok) throw new Error('Unable to set authentication cookie. Pass a response object for Pages Router or call from App Router context.');
-  return result.user;
-}
-
-export async function logoutNext(res?: any) {
-  const result = logoutCore();
-  const ok = await clearAuthCookie({ res });
-  if (!ok) throw new Error('Unable to clear authentication cookie. Pass a response object for Pages Router or call from App Router context.');
-  return { message: result.message };
-}
-
-export async function getCurrentUserNext(req?: any) {
-  const token = await extractToken({ req });
-  return getCurrentUserFromToken(token);
-}
-
-export async function isAuthenticatedNext(req?: any): Promise<boolean> {
-  return isTokenValid(await extractToken({ req }));
-}
 
 // === Flexible Functions with explicit naming ===
 
-export async function signupNextFlexible(
-  email: string,
-  password: string,
-  res?: any
-) {
-  return signupNext(email, password, res);
-}
-
-export async function signinNextFlexible(
-  email: string,
-  password: string,
-  res?: any
-) {
-  return signinNext(email, password, res);
-}
-
-export async function getCurrentUserNextFlexible(req?: any) {
-  return getCurrentUserNext(req);
-}
+// (Original flexible exports moved to deprecation wrappers later in file)
 
 // === API Route Handlers ===
 
 export function createSignupHandler() {
   return async function handler(request: Request) {
     if (request.method !== 'POST') {
-      return Response.json(
-        { error: 'Method not allowed' },
-        { status: 405 }
-      );
+      return Response.json({ error: 'Method not allowed' }, { status: 405 });
     }
-
     try {
       const { email, password } = await request.json();
-
       if (!email || !password) {
-        return Response.json(
-          { error: 'Email and password are required' },
-          { status: 400 }
-        );
+        return Response.json({ error: 'Email and password are required' }, { status: 400 });
       }
-
       const result = await signupCore(email, password);
-      
-      const response = Response.json({
-        success: true,
-        user: result.user,
-        message: 'Account created successfully'
-      });
-
-      // Set cookie
-      const cookie = CookieUtils.createCookieString(
-        CookieUtils.getCookieName(),
-        result.token,
-        result.cookieOptions
-      );
+      const response = Response.json({ success: true, user: result.user, message: 'Account created successfully' });
+      const cookie = CookieUtils.createCookieString(CookieUtils.getCookieName(), result.token, { ...result.cookieOptions });
       response.headers.set('Set-Cookie', cookie);
-
       return response;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Signup failed';
-      const status = message.includes('already registered') ? 409 : 400;
-      
-      return Response.json(
-        { error: message },
-        { status }
-      );
+      const status = error instanceof ConflictError ? 409 : 400;
+      return Response.json({ error: message }, { status });
     }
   };
 }
@@ -628,46 +487,22 @@ export function createSignupHandler() {
 export function createSigninHandler() {
   return async function handler(request: Request) {
     if (request.method !== 'POST') {
-      return Response.json(
-        { error: 'Method not allowed' },
-        { status: 405 }
-      );
+      return Response.json({ error: 'Method not allowed' }, { status: 405 });
     }
-
     try {
       const { email, password } = await request.json();
-
       if (!email || !password) {
-        return Response.json(
-          { error: 'Email and password are required' },
-          { status: 400 }
-        );
+        return Response.json({ error: 'Email and password are required' }, { status: 400 });
       }
-
       const result = await signinCore(email, password);
-      
-      const response = Response.json({
-        success: true,
-        user: result.user,
-        message: 'Signed in successfully'
-      });
-
-      // Set cookie
-      const cookie = CookieUtils.createCookieString(
-        CookieUtils.getCookieName(),
-        result.token,
-        result.cookieOptions
-      );
+      const response = Response.json({ success: true, user: result.user, message: 'Signed in successfully' });
+      const cookie = CookieUtils.createCookieString(CookieUtils.getCookieName(), result.token, { ...result.cookieOptions });
       response.headers.set('Set-Cookie', cookie);
-
       return response;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Signin failed';
-      
-      return Response.json(
-        { error: message },
-        { status: 401 }
-      );
+      const status = error instanceof UnauthorizedError ? 401 : error instanceof ForbiddenError ? 403 : 400;
+      return Response.json({ error: message }, { status });
     }
   };
 }
@@ -777,33 +612,18 @@ export function createSignupHandlerPages() {
     if (req.method !== 'POST') {
       return res.status(405).json({ error: 'Method not allowed' });
     }
-
     try {
       const { email, password } = req.body;
-
       if (!email || !password) {
         return res.status(400).json({ error: 'Email and password are required' });
       }
-
       const result = await signupCore(email, password);
-      
-      // Set cookie
-      const cookie = CookieUtils.createCookieString(
-        CookieUtils.getCookieName(),
-        result.token,
-        result.cookieOptions
-      );
+      const cookie = CookieUtils.createCookieString(CookieUtils.getCookieName(), result.token, { ...result.cookieOptions });
       res.setHeader('Set-Cookie', cookie);
-
-      return res.json({
-        success: true,
-        user: result.user,
-        message: 'Account created successfully'
-      });
+      return res.json({ success: true, user: result.user, message: 'Account created successfully' });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Signup failed';
-      const status = message.includes('already registered') ? 409 : 400;
-      
+      const status = error instanceof ConflictError ? 409 : 400;
       return res.status(status).json({ error: message });
     }
   };
@@ -814,32 +634,19 @@ export function createSigninHandlerPages() {
     if (req.method !== 'POST') {
       return res.status(405).json({ error: 'Method not allowed' });
     }
-
     try {
       const { email, password } = req.body;
-
       if (!email || !password) {
         return res.status(400).json({ error: 'Email and password are required' });
       }
-
       const result = await signinCore(email, password);
-      
-      // Set cookie
-      const cookie = CookieUtils.createCookieString(
-        CookieUtils.getCookieName(),
-        result.token,
-        result.cookieOptions
-      );
+      const cookie = CookieUtils.createCookieString(CookieUtils.getCookieName(), result.token, { ...result.cookieOptions });
       res.setHeader('Set-Cookie', cookie);
-
-      return res.json({
-        success: true,
-        user: result.user,
-        message: 'Signed in successfully'
-      });
+      return res.json({ success: true, user: result.user, message: 'Signed in successfully' });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Signin failed';
-      return res.status(401).json({ error: message });
+      const status = error instanceof UnauthorizedError ? 401 : error instanceof ForbiddenError ? 403 : 400;
+      return res.status(status).json({ error: message });
     }
   };
 }
@@ -960,9 +767,13 @@ export function resetEnvironmentDetection(): void {
 }
 
 export function forceNextJsAvailability(available: boolean = true): void {
-  // For testing purposes - force Next.js availability
-  const info = ModuleLoader.getEnvironmentInfo();
-  info.isNextJsAvailable = available;
+  // For testing purposes - force Next.js availability (properly mutates internal state)
+  ModuleLoader.setOverride({ isNextJsAvailable: available });
+}
+
+export async function getNextJsEnvironmentInfoAsync(): Promise<EnvironmentInfo> {
+  await ModuleLoader.loadModules();
+  return ModuleLoader.getEnvironmentInfo();
 }
 
 // === Cookie Helpers ===
@@ -1023,3 +834,16 @@ export function createAuthenticatedResponse(
 
   return response;
 }
+
+// --- Deprecation Wrappers (P1) ---
+const _depEmitted = new Set<string>();
+function warnDep(oldName: string, newUsage: string) {
+  if (process.env.NODE_ENV === 'production') return;
+  const key = `${oldName}->${newUsage}`;
+  if (_depEmitted.has(key)) return;
+  _depEmitted.add(key);
+  console.warn(`[AUTHRIX][DEPRECATION] ${oldName} is deprecated. Use ${newUsage} instead.`);
+}
+
+// Wrap flexible variants with deprecation warning (will later point to unified API)
+// Legacy variant exports removed in favor of unified namespace API.

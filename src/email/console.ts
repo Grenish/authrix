@@ -1,4 +1,5 @@
 import { EmailService } from "../core/twoFactor";
+import type { EmailServiceCapabilities } from "../types/email";
 
 /**
  * Console Email Service (for development/testing)
@@ -12,6 +13,13 @@ import { EmailService } from "../core/twoFactor";
  * - Email content preview
  */
 export class ConsoleEmailService implements EmailService {
+  public readonly capabilities: EmailServiceCapabilities = {
+    templates: true,
+    headers: false,
+    tracking: false,
+    tags: false,
+    replyTo: false
+  };
   private readonly colors = {
     reset: '\x1b[0m',
     bright: '\x1b[1m',

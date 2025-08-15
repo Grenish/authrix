@@ -55,7 +55,7 @@ describe('Universal Framework', () => {
 
   describe('signupUniversal', () => {
     it('should sign up a new user successfully', async () => {
-      const mockResponse = {
+      const mockCoreResponse = {
         user: { id: '1', email: 'test@example.com' },
         token: 'token123',
         cookieOptions: {
@@ -66,14 +66,21 @@ describe('Universal Framework', () => {
           path: '/'
         },
         isNewUser: true
-      };
+      } as any;
       
-      mockSignupCore.mockResolvedValueOnce(mockResponse);
+      mockSignupCore.mockResolvedValueOnce(mockCoreResponse);
 
       const result = await signupUniversal('test@example.com', 'password');
 
-  expect(mockSignupCore).toHaveBeenCalledWith('test@example.com', 'password');
-  expect(result).toEqual(mockResponse);
+      expect(mockSignupCore).toHaveBeenCalledWith('test@example.com', 'password');
+      expect(result).toEqual({
+        success: true,
+        user: mockCoreResponse.user,
+        token: mockCoreResponse.token,
+        cookieOptions: mockCoreResponse.cookieOptions,
+        isNewUser: true,
+        requiresEmailVerification: undefined
+      });
     });
 
     it('should handle signup error', async () => {
@@ -90,7 +97,7 @@ describe('Universal Framework', () => {
 
   describe('signinUniversal', () => {
     it('should sign in user successfully', async () => {
-      const mockResponse = {
+      const mockCoreResponse = {
         user: { id: '1', email: 'test@example.com' },
         token: 'token123',
         cookieOptions: {
@@ -100,14 +107,20 @@ describe('Universal Framework', () => {
           sameSite: 'lax' as const,
           path: '/'
         }
-      };
+      } as any;
       
-      mockSigninCore.mockResolvedValueOnce(mockResponse);
+      mockSigninCore.mockResolvedValueOnce(mockCoreResponse);
 
       const result = await signinUniversal('test@example.com', 'password');
 
-  expect(mockSigninCore).toHaveBeenCalledWith('test@example.com', 'password');
-  expect(result).toEqual(mockResponse);
+      expect(mockSigninCore).toHaveBeenCalledWith('test@example.com', 'password');
+      expect(result).toEqual({
+        success: true,
+        user: mockCoreResponse.user,
+        token: mockCoreResponse.token,
+        cookieOptions: mockCoreResponse.cookieOptions,
+        isNewUser: undefined
+      });
     });
 
     it('should handle signin error', async () => {

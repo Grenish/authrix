@@ -22,3 +22,6 @@ export {
   generateSecurePassword,
   needsRehash
 } from './utils/hash';
+
+// Logger utilities
+export { logger, createLogger, reconfigureLogger } from './utils/logger';

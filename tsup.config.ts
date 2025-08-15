@@ -2,7 +2,10 @@ import { defineConfig } from "tsup";
 
 export default defineConfig({
     entry: [
-        "src/index.ts",
+    "src/index.ts",
+    "src/core.barrel.ts",
+    "src/security.ts",
+    "src/advanced.ts",
         "src/universal.ts",
         "src/nextjs.ts",
         "src/react.ts",

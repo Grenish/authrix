@@ -1,6 +1,6 @@
 {
   "name": "authrix",
-  "version": "2.0.3",
+  "version": "2.1.0",
   "description": "Lightweight, flexible authentication library for Node.js and TypeScript.",
   "sideEffects": false,
   "keywords": [
@@ -49,6 +49,26 @@
       "types": "./dist/universal.d.ts",
       "require": "./dist/universal.cjs",
       "import": "./dist/universal.mjs"
+    },
+    "./advanced": {
+      "types": "./dist/advanced.d.ts",
+      "require": "./dist/advanced.cjs",
+      "import": "./dist/advanced.mjs"
+    },
+    "./next": {
+      "types": "./dist/nextjs.d.ts",
+      "require": "./dist/nextjs.cjs",
+      "import": "./dist/nextjs.mjs"
+    },
+    "./core": {
+      "types": "./dist/core.barrel.d.ts",
+      "require": "./dist/core.barrel.cjs",
+      "import": "./dist/core.barrel.mjs"
+    },
+    "./security": {
+      "types": "./dist/security.d.ts",
+      "require": "./dist/security.cjs",
+      "import": "./dist/security.mjs"
     },
     "./nextjs": {
       "types": "./dist/nextjs.d.ts",

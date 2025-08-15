@@ -2,7 +2,8 @@ import type { Request, Response, NextFunction } from "express";
 import { authConfig } from "../config";
 import { verifyToken } from "../tokens/verifyToken";
 import { UnauthorizedError, InternalServerError, ForbiddenError } from "../utils/errors";
-import { getCurrentUserFromToken, type SessionUser } from "./session";
+import { getCurrentUserFromTokenWithRefresh, getCurrentUserFromToken, type SessionUser } from "./session";
+import { logger } from "../utils/logger";
 
 export interface AuthenticatedRequest extends Request {
   user?: SessionUser;
@@ -55,12 +56,20 @@ export async function requireAuth(
       throw new UnauthorizedError(customErrorMessage || "Authentication required");
     }
 
-    // Verify token and get user
-    const user = await getCurrentUserFromToken(token, {
+    // Explicit signature validation (fast fail for tampered tokens)
+    try {
+      verifyToken(token);
+    } catch (e) {
+      throw new UnauthorizedError(customErrorMessage || "Invalid or expired authentication");
+    }
+
+    // Verify token and get user (may return refreshed token wrapper)
+  const { user: userMaybe, refreshedToken } = await getCurrentUserFromTokenWithRefresh(token, {
       requireEmailVerification,
       updateLastSeen: true,
       includeUserProfile: true
     });
+  const user = userMaybe;
 
     if (!user) {
       // Clear invalid cookie
@@ -100,19 +109,28 @@ export async function requireAuth(
 
     // Attach user to request
     req.user = user;
+
+    // If rolling session produced refreshed token, set new cookie
+    if (refreshedToken) {
+      res.cookie(authConfig.cookieName, refreshedToken, {
+        httpOnly: true,
+        secure: authConfig.forceSecureCookies || process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: authConfig.sessionMaxAgeMs
+      });
+    }
     next();
 
   } catch (error) {
     // Enhanced error logging for debugging
-    if (process.env.NODE_ENV === 'development') {
-      console.debug('[AUTHRIX] Authentication failed:', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        path: req.path,
-        method: req.method,
-        userAgent: req.get('User-Agent'),
-        ip: req.ip
-      });
-    }
+    logger.debug('Authentication failed', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      path: req.path,
+      method: req.method,
+      userAgent: req.get('User-Agent'),
+      ip: req.ip
+    });
 
     // Let the global error handler manage the response
     next(error);
@@ -161,22 +179,14 @@ export async function optionalAuth(
       req.headers.authorization?.replace('Bearer ', '');
 
     if (token) {
-      const user = await getCurrentUserFromToken(token, {
-        updateLastSeen: false,
-        includeUserProfile: true
-      });
-
-      if (user) {
-        req.user = user;
-      }
+      const user = await getCurrentUserFromToken(token, { updateLastSeen: false, includeUserProfile: true });
+      if (user) req.user = user;
     }
 
     next();
   } catch (error) {
     // For optional auth, we don't fail on errors, just continue without user
-    if (process.env.NODE_ENV === 'development') {
-      console.debug('[AUTHRIX] Optional auth failed:', error);
-    }
+  logger.debug('Optional auth failed', error);
     next();
   }
 }

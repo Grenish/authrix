@@ -1,6 +1,8 @@
 import type { Request } from "express";
 import { authConfig } from "../config";
 import { verifyToken } from "../tokens/verifyToken";
+import { createToken } from "../tokens/createToken";
+import { logger } from "../utils/logger";
 import { UnauthorizedError } from "../utils/errors";
 
 export interface SessionUser {
@@ -40,7 +42,7 @@ export async function getCurrentUserFromToken(
     }
 
     // Verify and decode token
-    const payload = verifyToken(token);
+  const payload = verifyToken(token);
     if (!payload?.id) {
       return null;
     }
@@ -48,7 +50,7 @@ export async function getCurrentUserFromToken(
     // Check database connection
     const db = authConfig.db;
     if (!db) {
-      console.warn('[AUTHRIX] Database not configured for session validation');
+  logger.structuredWarn({ category: 'session', action: 'validation', outcome: 'skipped', message: 'Database not configured for session validation' });
       return null;
     }
 
@@ -68,7 +70,7 @@ export async function getCurrentUserFromToken(
       try {
         await db.updateUser(user.id, { lastLoginAt: new Date() });
       } catch (error) {
-        console.warn('[AUTHRIX] Failed to update last login timestamp:', error);
+  logger.structuredWarn({ category: 'session', action: 'update-last-login', outcome: 'failed', message: 'Failed to update last login timestamp', error: error instanceof Error ? error.message : String(error) });
         // Don't fail the session validation for this
       }
     }
@@ -95,9 +97,7 @@ export async function getCurrentUserFromToken(
 
   } catch (error) {
     // Log error for debugging but don't expose details
-    if (process.env.NODE_ENV === 'development') {
-      console.debug('[AUTHRIX] Session validation error:', error);
-    }
+  logger.debug('Session validation error', error);
     return null;
   }
 }
@@ -173,10 +173,36 @@ export async function requireValidSession(
   options?: SessionValidationOptions
 ): Promise<SessionUser> {
   const user = await getCurrentUserFromToken(token, options);
-
   if (!user) {
     throw new UnauthorizedError('Valid authentication required');
   }
-
   return user;
+}
+
+/**
+ * Extended helper returning refresh metadata when rolling sessions enabled
+ */
+export async function getCurrentUserFromTokenWithRefresh(
+  token: string | null,
+  options: SessionValidationOptions = {}
+): Promise<{ user: SessionUser | null; refreshedToken?: string }> {
+  const user = await getCurrentUserFromToken(token, options);
+  if (!user) return { user: null };
+
+  try {
+    if (authConfig.rollingSessionEnabled) {
+      const payload = verifyToken(token!);
+      if (payload.exp) {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const secondsLeft = payload.exp - nowSeconds;
+        if (secondsLeft > 0 && secondsLeft <= authConfig.rollingSessionThresholdSeconds) {
+          const refreshedToken = createToken({ id: user.id, email: user.email });
+          return { user, refreshedToken };
+        }
+      }
+    }
+  } catch {
+    // Ignore; base validation already done
+  }
+  return { user };
 }

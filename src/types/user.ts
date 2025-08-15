@@ -1,8 +1,6 @@
+import type { AuthUser } from "./db";
+
 export const USER_COLLECTION = process.env.MONGO_USER_COLLECTION || "users";
 
-export interface User {
-    id: string;
-    email: string;
-    password: string;
-    createdAt: Date;
-}
+// Keep User in sync with the canonical AuthUser shape
+export type User = AuthUser;

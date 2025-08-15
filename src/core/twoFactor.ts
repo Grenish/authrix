@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { authConfig } from "../config";
+import { EmailServiceRegistry as UnifiedEmailServiceRegistry } from "./emailRegistry";
 import { BadRequestError, InternalServerError } from "../utils/errors";
 
 export interface TwoFactorCode {
@@ -421,62 +422,8 @@ export async function getUserTwoFactorCodes(
 /**
  * Enhanced email service registry with validation
  */
-export class EmailServiceRegistry {
-  private static services = new Map<string, EmailService>();
-  private static smsServices = new Map<string, SMSService>();
-
-  static register(name: string, service: EmailService): void {
-    if (!name?.trim()) {
-      throw new BadRequestError('Service name is required');
-    }
-    if (!service || typeof service.sendVerificationEmail !== 'function') {
-      throw new BadRequestError('Invalid email service: must implement sendVerificationEmail method');
-    }
-    this.services.set(name, service);
-  }
-
-  static registerSMS(name: string, service: SMSService): void {
-    if (!name?.trim()) {
-      throw new BadRequestError('Service name is required');
-    }
-    if (!service || typeof service.sendVerificationSMS !== 'function') {
-      throw new BadRequestError('Invalid SMS service: must implement sendVerificationSMS method');
-    }
-    this.smsServices.set(name, service);
-  }
-
-  static get(name: string): EmailService | undefined {
-    return this.services.get(name);
-  }
-
-  static getSMS(name: string): SMSService | undefined {
-    return this.smsServices.get(name);
-  }
-
-  static getDefault(): EmailService | undefined {
-    return this.services.get('default');
-  }
-
-  static getDefaultSMS(): SMSService | undefined {
-    return this.smsServices.get('default');
-  }
-
-  static list(): string[] {
-    return Array.from(this.services.keys());
-  }
-
-  static listSMS(): string[] {
-    return Array.from(this.smsServices.keys());
-  }
-
-  static unregister(name: string): boolean {
-    return this.services.delete(name);
-  }
-
-  static unregisterSMS(name: string): boolean {
-    return this.smsServices.delete(name);
-  }
-}
+// Deprecated: Use unified registry from './emailRegistry'
+// Keeping type exports above for back-compat, but delegate all lookups to unified registry.
 
 /**
  * Send verification email using configured email service
@@ -507,19 +454,19 @@ export async function sendVerificationEmail(
     throw new BadRequestError('Verification code is required');
   }
 
-  const emailService = EmailServiceRegistry.get(serviceName);
-  if (!emailService) {
+  const resolvedService = UnifiedEmailServiceRegistry.get(serviceName) || UnifiedEmailServiceRegistry.getDefault();
+  if (!resolvedService) {
     throw new InternalServerError(`Email service '${serviceName}' not configured. Please register an email service.`);
   }
 
   try {
-    await emailService.sendVerificationEmail(email, code, {
+    await resolvedService.sendVerificationEmail(email, code, {
       subject,
       template,
       metadata
     });
-  } catch (error) {
-    console.error('[AUTHRIX] Failed to send verification email:', error);
+  } catch (_error) {
+    // Avoid leaking details (e.g., whether email exists or provider specifics)
     throw new InternalServerError('Failed to send verification email');
   }
 }
@@ -551,18 +498,18 @@ export async function sendVerificationSMS(
     throw new BadRequestError('Verification code is required');
   }
 
-  const smsService = EmailServiceRegistry.getSMS(serviceName);
-  if (!smsService) {
+  const resolvedSms = UnifiedEmailServiceRegistry.getSMS(serviceName) || UnifiedEmailServiceRegistry.getDefaultSMS();
+  if (!resolvedSms) {
     throw new InternalServerError(`SMS service '${serviceName}' not configured. Please register an SMS service.`);
   }
 
   try {
-    await smsService.sendVerificationSMS(phone, code, {
+    await resolvedSms.sendVerificationSMS(phone, code, {
       template,
       metadata
     });
-  } catch (error) {
-    console.error('[AUTHRIX] Failed to send verification SMS:', error);
+  } catch (_error) {
+    // Avoid leaking details
     throw new InternalServerError('Failed to send verification SMS');
   }
 }

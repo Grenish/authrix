@@ -1,7 +1,3 @@
-// Next.js utilities for Authrix - unified API for App Router, Pages Router & Middleware
-// The goal of this refactor is to offer consistent behaviors while preserving
-// existing exported function names for backwards compatibility.
-
 import { signupCore } from "../core/signup";
 import { signinCore } from "../core/signin";
 import { logoutCore } from "../core/logout";

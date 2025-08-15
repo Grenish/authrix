@@ -14,6 +14,7 @@ Backward compatibility is preserved through deprecation wrappers that emit one�
 - Explicit JWT signature & expiry verification in middleware / require paths before user resolution.
 - Optional rolling session refresh (configurable threshold & enable flag).
 - Structured logging: `logger.structuredWarn({ category, action, outcome, message })` applied in core + deprecations.
+- SSO hardening: SSO-created users now store a hashed random password; user records can include `authMethod` and `authProvider` metadata.
 - Barrel / subpath export optimization: `./next`, `./universal`, `./security`, `./advanced`, `./core`.
 - Deprecation wrappers for legacy core functions with single emission warnings.
 - Test additions: tampered token negative path; cookie unit normalization baseline.
@@ -66,6 +67,7 @@ auth.env.isNext / isNode / isBrowser / details
 3. For middleware, adopt `auth.middleware.requireAuth` (Express / Next API) or use Next route handlers via `auth.handlers.*`.
 4. Optional rolling refresh: set `rollingSessionEnabled: true` and tune `rollingSessionThresholdSeconds`.
 5. Remove any manual `Max-Age` calculations—central utilities now normalize.
+6. If using PostgreSQL and you have an existing `auth_users` table, add the new optional columns for profile/provider metadata (idempotent): see `docs/POSTGRES_MIGRATION_PROFILE_FIELDS.md`.
 
 ## Rolling Session Behavior
 When enabled, a new token is issued if remaining lifetime ≤ `rollingSessionThresholdSeconds`, extending session continuity while preserving a bounded absolute lifetime (re-issue retains canonical `sessionMaxAgeMs`).

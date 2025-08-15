@@ -11,6 +11,8 @@ export interface AuthUser {
   emailVerified?: boolean;
   emailVerifiedAt?: Date;
   twoFactorEnabled?: boolean;
+  authMethod?: 'password' | 'sso';
+  authProvider?: string;
   [key: string]: any;
 }
 
@@ -46,6 +48,8 @@ export interface AuthDbAdapter {
     lastName?: string;
     fullName?: string;
     profilePicture?: string;
+  authMethod?: 'password' | 'sso';
+  authProvider?: string;
   }): Promise<AuthUser>;
   // Make updateUser strongly recommended (used for password rehash, timestamps)
   updateUser?(id: string, data: Partial<AuthUser>): Promise<AuthUser>;

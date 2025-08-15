@@ -1,4 +1,18 @@
 import { EmailService } from "../core/twoFactor";
+import { EmailServiceRegistry as UnifiedEmailServiceRegistry } from "../core/emailRegistry";
+import { createRequire } from "module";
+
+const req = createRequire(import.meta.url);
+
+// Deprecation warning (once): importing legacy providers registry helpers
+try {
+  const ONCE_KEY = Symbol.for('authrix.email.providers.deprecation');
+  if (!(globalThis as any)[ONCE_KEY]) {
+    (globalThis as any)[ONCE_KEY] = true;
+    // Keep concise, actionable guidance
+    console.warn('[AUTHRIX][DEPRECATION] src/email/providers helpers are deprecated. Use the unified EmailServiceRegistry from "core/emailRegistry" and init via authConfig.initEmailServices. These shims will be removed in a future minor release.');
+  }
+} catch {}
 
 // Import individual email service providers
 export { GmailEmailService, gmailEmailService, createGmailEmailService } from "./gmail";
@@ -9,10 +23,24 @@ export { SMTPEmailService, smtpEmailService, createSMTPEmailService } from "./cu
 
 // Re-export types for convenience
 export type { EmailService } from "../core/twoFactor";
+export type { EmailServiceCapabilities } from "../types/email";
+
+// Static capability map for built-in providers (DX hinting only)
+export const providerCapabilities: Record<string, import('../types/email').EmailServiceCapabilities> = {
+  resend: { templates: true, headers: true, tracking: true, tags: true, replyTo: true },
+  sendgrid: { templates: true, headers: true, tracking: true, tags: true, replyTo: true },
+  gmail: { templates: true, headers: true, tracking: false, tags: false, replyTo: true },
+  smtp: { templates: true, headers: true, tracking: false, tags: false, replyTo: true },
+  console: { templates: true, headers: false, tracking: false, tags: false, replyTo: false }
+};
 
 /**
  * Email Service Registry
  * Manages and provides access to different email service providers
+ */
+/**
+ * Deprecated: Local EmailServiceRegistry (kept for back-compat).
+ * Use UnifiedEmailServiceRegistry from '../core/emailRegistry'.
  */
 export class EmailServiceRegistry {
   private static services = new Map<string, EmailService>();
@@ -30,7 +58,14 @@ export class EmailServiceRegistry {
       throw new Error('Invalid email service: must implement sendVerificationEmail method');
     }
 
-    this.services.set(name.toLowerCase(), service);
+  this.services.set(name.toLowerCase(), service);
+  // Mirror into unified registry and set capabilities when available
+  try {
+    UnifiedEmailServiceRegistry.register(name, service);
+    if ((service as any).capabilities) {
+      UnifiedEmailServiceRegistry.setCapabilities(name, (service as any).capabilities);
+    }
+  } catch {}
   }
 
   /**
@@ -49,6 +84,7 @@ export class EmailServiceRegistry {
       throw new Error(`Email service '${name}' not found. Register it first.`);
     }
     this.defaultService = name.toLowerCase();
+  try { UnifiedEmailServiceRegistry.setDefault(name); } catch {}
   }
 
   /**
@@ -64,6 +100,10 @@ export class EmailServiceRegistry {
     if (autoDefault) {
       return this.get(autoDefault);
     }
+
+    // Attempt unified registry default (for cross-module coherence)
+    const unified = UnifiedEmailServiceRegistry.getDefault();
+    if (unified) return unified;
 
     return undefined;
   }
@@ -99,6 +139,7 @@ export class EmailServiceRegistry {
   static clear(): void {
     this.services.clear();
     this.defaultService = null;
+  try { UnifiedEmailServiceRegistry.clear(); } catch {}
   }
 
   /**
@@ -188,12 +229,19 @@ export function initializeEmailServices(): {
   errors: Array<{ service: string; error: string }>;
   default: string | null;
 } {
+  try {
+    const ONCE_KEY = Symbol.for('authrix.email.providers.deprecation.initialize');
+    if (!(globalThis as any)[ONCE_KEY]) {
+      (globalThis as any)[ONCE_KEY] = true;
+      console.warn('[AUTHRIX][DEPRECATION] initializeEmailServices() is deprecated. Initialize via initAuth({ email }) or initEmailServices() from config. This shim will be removed in a future minor release.');
+    }
+  } catch {}
   const initialized: string[] = [];
   const errors: Array<{ service: string; error: string }> = [];
 
   // Always register console service
   try {
-    const { ConsoleEmailService } = require('./console');
+    const { ConsoleEmailService } = req('./console');
     EmailServiceRegistry.register('console', new ConsoleEmailService());
     initialized.push('console');
   } catch (error) {
@@ -206,7 +254,7 @@ export function initializeEmailServices(): {
   // Register Resend if configured
   if (process.env.RESEND_API_KEY) {
     try {
-      const { ResendEmailService } = require('./resend');
+  const { ResendEmailService } = req('./resend');
       EmailServiceRegistry.register('resend', new ResendEmailService());
       initialized.push('resend');
     } catch (error) {
@@ -220,7 +268,7 @@ export function initializeEmailServices(): {
   // Register SendGrid if configured
   if (process.env.SENDGRID_API_KEY) {
     try {
-      const { SendGridEmailService } = require('./sendgrid');
+  const { SendGridEmailService } = req('./sendgrid');
       EmailServiceRegistry.register('sendgrid', new SendGridEmailService());
       initialized.push('sendgrid');
     } catch (error) {
@@ -234,7 +282,7 @@ export function initializeEmailServices(): {
   // Register Gmail if configured
   if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
     try {
-      const { GmailEmailService } = require('./gmail');
+  const { GmailEmailService } = req('./gmail');
       EmailServiceRegistry.register('gmail', new GmailEmailService());
       initialized.push('gmail');
     } catch (error) {
@@ -248,7 +296,7 @@ export function initializeEmailServices(): {
   // Register SMTP if configured
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     try {
-      const { SMTPEmailService } = require('./customSMTP');
+  const { SMTPEmailService } = req('./customSMTP');
       EmailServiceRegistry.register('smtp', new SMTPEmailService());
       initialized.push('smtp');
     } catch (error) {
@@ -298,6 +346,13 @@ export function getAvailableEmailServices(): {
   configured: string[];
   instructions: Record<string, any>;
 } {
+  try {
+    const ONCE_KEY = Symbol.for('authrix.email.providers.deprecation.available');
+    if (!(globalThis as any)[ONCE_KEY]) {
+      (globalThis as any)[ONCE_KEY] = true;
+      console.warn('[AUTHRIX][DEPRECATION] getAvailableEmailServices() is deprecated. Prefer querying EmailServiceRegistry.status() and provider docs.');
+    }
+  } catch {}
   const services = [
     {
       name: 'resend',
@@ -393,6 +448,13 @@ export function getEmailServiceInstructions(): Record<string, {
   example: string;
   links?: string[];
 }> {
+  try {
+    const ONCE_KEY = Symbol.for('authrix.email.providers.deprecation.instructions');
+    if (!(globalThis as any)[ONCE_KEY]) {
+      (globalThis as any)[ONCE_KEY] = true;
+      console.warn('[AUTHRIX][DEPRECATION] getEmailServiceInstructions() is deprecated. See docs/EMAIL_ENV_VARS.md and provider-specific guides.');
+    }
+  } catch {}
   return {
     resend: {
       description: 'Modern email API with excellent deliverability and analytics',

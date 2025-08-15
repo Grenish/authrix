@@ -6,7 +6,8 @@ import { signupCore } from './core/signup';
 import { signinCore } from './core/signin';
 import { logoutCore } from './core/logout';
 import { getCurrentUserFromToken, isTokenValid } from './core/session';
-import { generateTwoFactorCode, verifyTwoFactorCode, initiateEmailVerification, initiateSMSVerification, sendVerificationEmail, sendVerificationSMS, getUserTwoFactorCodes, cleanupExpiredCodes, EmailServiceRegistry } from './core/twoFactor';
+import { generateTwoFactorCode, verifyTwoFactorCode, initiateEmailVerification, initiateSMSVerification, sendVerificationEmail, sendVerificationSMS, getUserTwoFactorCodes, cleanupExpiredCodes } from './core/twoFactor';
+import { EmailServiceRegistry } from './core/emailRegistry';
 import { hashPassword, verifyPassword, verifyAndCheckRehash, validatePassword, generateSecurePassword, needsRehash } from './utils/hash';
 
 export const core = {
@@ -41,5 +42,6 @@ export const hash = {
 // Direct re-exports for granular named imports
 export { signupCore, signinCore, logoutCore };
 export { getCurrentUserFromToken, isTokenValid };
-export { generateTwoFactorCode, verifyTwoFactorCode, initiateEmailVerification, initiateSMSVerification, sendVerificationEmail, sendVerificationSMS, getUserTwoFactorCodes, cleanupExpiredCodes, EmailServiceRegistry };
+export { generateTwoFactorCode, verifyTwoFactorCode, initiateEmailVerification, initiateSMSVerification, sendVerificationEmail, sendVerificationSMS, getUserTwoFactorCodes, cleanupExpiredCodes };
+export { EmailServiceRegistry } from './core/emailRegistry';
 export { hashPassword, verifyPassword, verifyAndCheckRehash, validatePassword, generateSecurePassword, needsRehash };

@@ -104,9 +104,7 @@ function clearLoginAttempts(email: string): void {
   loginAttempts.delete(email);
 }
 
-/**
- * Framework-agnostic signin function with enhanced security
- */
+/** Framework-agnostic signin with rate limiting, optional email verification check, and rolling updates. */
 export async function signinCore(
   email: string,
   password: string,
@@ -145,6 +143,7 @@ export async function signinCore(
     const lockoutMessage = rateLimitCheck.lockedUntil
       ? `Account temporarily locked. Try again after ${rateLimitCheck.lockedUntil.toLocaleTimeString()}`
       : 'Too many login attempts. Please try again later.';
+    logger.structuredWarn({ category: 'auth', action: 'signin', outcome: 'locked', message: lockoutMessage, email: normalizedEmail, attemptsRemaining: 0 });
     throw new ForbiddenError(lockoutMessage);
   }
 
@@ -186,6 +185,7 @@ export async function signinCore(
     }
 
     if (!isValidPassword) {
+      logger.structuredWarn({ category: 'auth', action: 'signin', outcome: 'invalid-credentials', message: 'Invalid email or password', email: normalizedEmail, attemptsRemaining: rateLimitCheck.attemptsRemaining });
       throw new UnauthorizedError("Invalid email or password");
     }
 
@@ -279,11 +279,14 @@ export async function signinCore(
 
   } catch (error) {
     // Log failed attempt for monitoring
-    logger.debug('Signin failed', {
-      email: normalizedEmail,
-      error: error instanceof Error ? error.message : 'Unknown error',
-      attemptsRemaining: rateLimitCheck.attemptsRemaining
-    });
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    if (error instanceof ForbiddenError) {
+      logger.structuredWarn({ category: 'auth', action: 'signin', outcome: 'forbidden', message: msg, email: normalizedEmail, attemptsRemaining: rateLimitCheck.attemptsRemaining });
+    } else if (error instanceof UnauthorizedError) {
+      logger.structuredWarn({ category: 'auth', action: 'signin', outcome: 'unauthorized', message: msg, email: normalizedEmail, attemptsRemaining: rateLimitCheck.attemptsRemaining });
+    } else {
+      logger.error('Signin failed', { email: normalizedEmail, error: msg });
+    }
 
     // Re-throw the error to be handled by the caller
     throw error;

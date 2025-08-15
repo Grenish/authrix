@@ -1,8 +1,11 @@
 import { randomUUID } from "crypto";
 import { authConfig } from "../config";
 import { createToken } from "../tokens/createToken";
-import { generateSecurePassword } from "../utils/hash";
+import { generateSecurePassword, hashPassword } from "../utils/hash";
 
+/**
+ * Normalized SSO user profile as returned by provider callbacks.
+ */
 export interface SSOUser {
   id: string;
   email: string;
@@ -17,6 +20,7 @@ export interface SSOUser {
   [key: string]: any;
 }
 
+/** Options controlling SSO account handling and merging */
 export interface SSOOptions {
   autoCreateUser?: boolean;
   updateExistingUser?: boolean;
@@ -25,6 +29,7 @@ export interface SSOOptions {
   customUserMapping?: (ssoUser: SSOUser) => Partial<any>;
 }
 
+/** Result of a completed SSO authentication */
 export interface SSOResult {
   user: {
     id: string;
@@ -47,9 +52,7 @@ export interface SSOResult {
   provider: string;
 }
 
-/**
- * Process SSO authentication and create/update user
- */
+/** Orchestrates SSO auth: finds/creates user, merges minimal profile, and returns JWT. */
 export async function processSSOAuthentication(
   ssoUser: SSOUser,
   options: SSOOptions = {}
@@ -156,9 +159,11 @@ export async function processSSOAuthentication(
     // Prepare user data for creation
     const userData: any = {
       email: normalizedEmail,
-      password: generateSecurePassword(32), // Generate secure random password for SSO users
+      password: await hashPassword(generateSecurePassword(32), { skipValidation: true }), // Generate and hash password for SSO users
       emailVerified: requireVerifiedEmail ? (ssoUser.verified !== false) : true,
       emailVerifiedAt: requireVerifiedEmail && ssoUser.verified !== false ? new Date() : undefined,
+      authMethod: 'sso',
+      authProvider: ssoUser.provider,
     };
 
     // Apply custom mapping if provided
@@ -247,6 +252,8 @@ export async function processSSOAuthentication(
   lastName: existingUser.lastName,
   fullName: existingUser.fullName,
   profilePicture: existingUser.profilePicture,
+  ...(existingUser.authMethod ? { authMethod: existingUser.authMethod } : {}),
+  ...(existingUser.authProvider ? { authProvider: existingUser.authProvider } : {}),
     },
     token,
     cookieOptions: {
@@ -339,9 +346,6 @@ export async function handleAppleSSO(
     throw new Error(`Apple SSO failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
-
-// This is a new update for this patch: that includes the following updates
-// Newer OAuth: Discord, X, Facebook, LinkedIn, CustomOAuth, And adding more soon in the future.
 
 /**
  * Handle Discord OAuth authentication

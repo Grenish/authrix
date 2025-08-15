@@ -1,4 +1,5 @@
 import { EmailService } from "../core/twoFactor";
+import type { EmailServiceCapabilities } from "../types/email";
 
 /**
  * SendGrid Email Service
@@ -23,6 +24,13 @@ import { EmailService } from "../core/twoFactor";
  * - Suppression list management
  */
 export class SendGridEmailService implements EmailService {
+  public readonly capabilities: EmailServiceCapabilities = {
+    templates: true,
+    headers: true,
+    tracking: true,
+    tags: true,
+    replyTo: true
+  };
   private sgMail: any;
   private isInitialized: boolean = false;
   private initializationPromise: Promise<void> | null = null;
@@ -61,8 +69,7 @@ export class SendGridEmailService implements EmailService {
       const apiKey = process.env.SENDGRID_API_KEY;
       if (!apiKey) {
         throw new Error(
-          'SendGrid email service requires SENDGRID_API_KEY environment variable. ' +
-          'Get your API key from https://app.sendgrid.com/settings/api_keys'
+          'SENDGRID_API_KEY is required. Create one at https://app.sendgrid.com/settings/api_keys'
         );
       }
 
@@ -133,12 +140,12 @@ export class SendGridEmailService implements EmailService {
 
     const fromEmail = process.env.SENDGRID_FROM_EMAIL;
     if (!fromEmail) {
-      throw new Error('SendGrid requires SENDGRID_FROM_EMAIL environment variable with a verified sender email');
+      throw new Error('SENDGRID_FROM_EMAIL is required (verified sender).');
     }
 
     // Validate from email format
     if (!emailRegex.test(fromEmail)) {
-      throw new Error('SENDGRID_FROM_EMAIL must be a valid email address');
+  throw new Error('SENDGRID_FROM_EMAIL must be a valid email address (e.g., no-reply@yourdomain.com)');
     }
 
     const fromName = process.env.SENDGRID_FROM_NAME || metadata.appName || 'Authrix';

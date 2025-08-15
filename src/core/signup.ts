@@ -104,9 +104,7 @@ async function generateUniqueUsername(email: string, db: any): Promise<string> {
   return username;
 }
 
-/**
- * Framework-agnostic signup function with enhanced features
- */
+/** Framework-agnostic signup with validation, optional email verification, and profile fields support. */
 export async function signupCore(
   email: string,
   password: string,
@@ -190,6 +188,8 @@ export async function signupCore(
       password: hashedPassword,
       emailVerified: !requireEmailVerification, // Auto-verify if not required
       createdAt: new Date(),
+  authMethod: 'password',
+  authProvider: 'password',
       ...customUserData
     };
 

@@ -32,29 +32,38 @@ export function resetPostgreSQLConnection() {
 async function getPool(): Promise<any> {
   if (!pool) {
     const PoolClass = await loadPgPool();
-    const connectionString = process.env.DATABASE_URL || process.env.POSTGRESQL_URL;
-    
+    const connectionString =
+      process.env.DATABASE_URL || process.env.POSTGRESQL_URL;
+
     if (connectionString) {
       // Use connection string
       pool = new PoolClass({
         connectionString,
-        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+        ssl:
+          process.env.NODE_ENV === "production"
+            ? { rejectUnauthorized: false }
+            : false,
       });
     } else {
       // Use individual environment variables
       const config = {
-        host: process.env.POSTGRESQL_HOST || process.env.PGHOST || 'localhost',
-        port: parseInt(process.env.POSTGRESQL_PORT || process.env.PGPORT || '5432'),
+        host: process.env.POSTGRESQL_HOST || process.env.PGHOST || "localhost",
+        port: parseInt(
+          process.env.POSTGRESQL_PORT || process.env.PGPORT || "5432"
+        ),
         database: process.env.POSTGRESQL_DATABASE || process.env.PGDATABASE,
         user: process.env.POSTGRESQL_USER || process.env.PGUSER,
         password: process.env.POSTGRESQL_PASSWORD || process.env.PGPASSWORD,
-        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+        ssl:
+          process.env.NODE_ENV === "production"
+            ? { rejectUnauthorized: false }
+            : false,
       };
 
       if (!config.database || !config.user || !config.password) {
         throw new Error(
           "PostgreSQL configuration missing. Either set DATABASE_URL/POSTGRESQL_URL or provide individual environment variables: " +
-          "POSTGRESQL_HOST, POSTGRESQL_PORT, POSTGRESQL_DATABASE, POSTGRESQL_USER, POSTGRESQL_PASSWORD"
+            "POSTGRESQL_HOST, POSTGRESQL_PORT, POSTGRESQL_DATABASE, POSTGRESQL_USER, POSTGRESQL_PASSWORD"
         );
       }
 
@@ -62,20 +71,28 @@ async function getPool(): Promise<any> {
     }
 
     // Handle pool errors
-    pool.on('error', (err: Error) => {
-      console.error('PostgreSQL pool error:', err);
+    pool.on("error", (err: Error) => {
+      console.error("PostgreSQL pool error:", err);
     });
   }
-  
+
   return pool;
 }
 
 function getUserTableName(): string {
-  return process.env.POSTGRESQL_USER_TABLE || process.env.AUTH_USER_TABLE || "auth_users";
+  return (
+    process.env.POSTGRESQL_USER_TABLE ||
+    process.env.AUTH_USER_TABLE ||
+    "auth_users"
+  );
 }
 
 function getTwoFactorTableName(): string {
-  return process.env.POSTGRESQL_2FA_TABLE || process.env.AUTH_2FA_TABLE || "auth_two_factor_codes";
+  return (
+    process.env.POSTGRESQL_2FA_TABLE ||
+    process.env.AUTH_2FA_TABLE ||
+    "auth_two_factor_codes"
+  );
 }
 
 // Initialize database tables
@@ -93,6 +110,10 @@ export async function initializePostgreSQLTables() {
         username VARCHAR(100) UNIQUE,
         first_name VARCHAR(100),
         last_name VARCHAR(100),
+        full_name TEXT,
+        profile_picture TEXT,
+        auth_method VARCHAR(20),
+        auth_provider VARCHAR(100),
         password TEXT NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         email_verified BOOLEAN DEFAULT FALSE,
@@ -134,9 +155,9 @@ export async function initializePostgreSQLTables() {
       CREATE INDEX IF NOT EXISTS idx_${twoFactorTable}_created_at ON ${twoFactorTable}(created_at);
     `);
 
-    console.log('PostgreSQL tables initialized successfully');
+    console.log("PostgreSQL tables initialized successfully");
   } catch (error) {
-    console.error('Error initializing PostgreSQL tables:', error);
+    console.error("Error initializing PostgreSQL tables:", error);
     throw error;
   }
 }
@@ -145,15 +166,17 @@ export async function initializePostgreSQLTables() {
  * Check if error is a duplicate key error for a specific field
  */
 function isDuplicateKeyError(error: any, field: string): boolean {
-  if (!error || typeof error.message !== 'string') return false;
-  
+  if (!error || typeof error.message !== "string") return false;
+
   const message = error.message.toLowerCase();
   const fieldLower = field.toLowerCase();
-  
-  return message.includes('duplicate key') && 
-         (message.includes(`${fieldLower}_idx`) || 
-          message.includes(`${fieldLower}_key`) ||
-          message.includes(`unique constraint`) && message.includes(fieldLower));
+
+  return (
+    message.includes("duplicate key") &&
+    (message.includes(`${fieldLower}_idx`) ||
+      message.includes(`${fieldLower}_key`) ||
+      (message.includes(`unique constraint`) && message.includes(fieldLower)))
+  );
 }
 
 /**
@@ -161,20 +184,22 @@ function isDuplicateKeyError(error: any, field: string): boolean {
  */
 function rowToUser(row: any): AuthUser {
   if (!row) return null as any;
-  
+
   return {
     id: row.id,
     email: row.email,
     password: row.password,
     username: row.username,
     firstName: row.first_name,
-  lastName: row.last_name,
-  fullName: row.full_name,
-  profilePicture: row.profile_picture,
+    lastName: row.last_name,
+    fullName: row.full_name,
+    profilePicture: row.profile_picture,
     createdAt: row.created_at,
     emailVerified: row.email_verified,
     emailVerifiedAt: row.email_verified_at,
     twoFactorEnabled: row.two_factor_enabled,
+    authMethod: row.auth_method,
+    authProvider: row.auth_provider,
   };
 }
 
@@ -200,7 +225,7 @@ export const postgresqlAdapter: AuthDbAdapter = {
       const pool = await getPool();
       const tableName = getUserTableName();
       const normalizedEmail = email.toLowerCase().trim();
-      
+
       const result = await pool.query(
         `SELECT * FROM ${tableName} WHERE email = $1 LIMIT 1`,
         [normalizedEmail]
@@ -211,7 +236,10 @@ export const postgresqlAdapter: AuthDbAdapter = {
       return rowToUser(result.rows[0]);
     } catch (error) {
       // Let configuration errors bubble up
-      if (error instanceof Error && error.message.includes('PostgreSQL configuration missing')) {
+      if (
+        error instanceof Error &&
+        error.message.includes("PostgreSQL configuration missing")
+      ) {
         throw error;
       }
       console.error("Error finding user by email:", error);
@@ -226,7 +254,7 @@ export const postgresqlAdapter: AuthDbAdapter = {
     try {
       const pool = await getPool();
       const tableName = getUserTableName();
-      
+
       const result = await pool.query(
         `SELECT * FROM ${tableName} WHERE id = $1 LIMIT 1`,
         [id]
@@ -246,7 +274,7 @@ export const postgresqlAdapter: AuthDbAdapter = {
       const pool = await getPool();
       const tableName = getUserTableName();
       const normalizedUsername = username.toLowerCase().trim();
-      
+
       const result = await pool.query(
         `SELECT * FROM ${tableName} WHERE LOWER(username) = $1 LIMIT 1`,
         [normalizedUsername]
@@ -261,50 +289,72 @@ export const postgresqlAdapter: AuthDbAdapter = {
     }
   },
 
-  async createUser({ email, password, username, firstName, lastName, fullName, profilePicture }): Promise<AuthUser> {
+  async createUser({
+    email,
+    password,
+    username,
+    firstName,
+    lastName,
+    fullName,
+    profilePicture,
+    authMethod,
+    authProvider,
+  }): Promise<AuthUser> {
     try {
       const pool = await getPool();
       const tableName = getUserTableName();
       const normalizedEmail = email.toLowerCase().trim();
-      const normalizedUsername = username ? username.toLowerCase().trim() : null;
-      
+      const normalizedUsername = username
+        ? username.toLowerCase().trim()
+        : null;
+
       // Build dynamic insert query
-      const fields = ['email', 'password'];
+      const fields = ["email", "password"];
       const values = [normalizedEmail, password];
-      const placeholders = ['$1', '$2'];
+      const placeholders = ["$1", "$2"];
       let paramCount = 3;
 
       if (normalizedUsername) {
-        fields.push('username');
+        fields.push("username");
         values.push(normalizedUsername);
         placeholders.push(`$${paramCount++}`);
       }
 
       if (firstName) {
-        fields.push('first_name');
+        fields.push("first_name");
         values.push(firstName.trim());
         placeholders.push(`$${paramCount++}`);
       }
 
       if (lastName) {
-        fields.push('last_name');
+        fields.push("last_name");
         values.push(lastName.trim());
         placeholders.push(`$${paramCount++}`);
       }
-      if (typeof fullName === 'string' && fullName.trim()) {
-        fields.push('full_name');
+      if (typeof fullName === "string" && fullName.trim()) {
+        fields.push("full_name");
         values.push(fullName.trim());
         placeholders.push(`$${paramCount++}`);
       }
-      if (typeof profilePicture === 'string' && profilePicture.trim()) {
-        fields.push('profile_picture');
+      if (typeof profilePicture === "string" && profilePicture.trim()) {
+        fields.push("profile_picture");
         values.push(profilePicture.trim());
+        placeholders.push(`$${paramCount++}`);
+      }
+      if (authMethod) {
+        fields.push("auth_method");
+        values.push(authMethod);
+        placeholders.push(`$${paramCount++}`);
+      }
+      if (authProvider) {
+        fields.push("auth_provider");
+        values.push(authProvider);
         placeholders.push(`$${paramCount++}`);
       }
 
       const query = `
-        INSERT INTO ${tableName} (${fields.join(', ')}) 
-        VALUES (${placeholders.join(', ')}) 
+        INSERT INTO ${tableName} (${fields.join(", ")}) 
+        VALUES (${placeholders.join(", ")}) 
         RETURNING *
       `;
 
@@ -313,16 +363,18 @@ export const postgresqlAdapter: AuthDbAdapter = {
       return rowToUser(result.rows[0]);
     } catch (error) {
       console.error("Error creating user:", error);
-      
+
       // Check for specific duplicate key errors
-      if (isDuplicateKeyError(error, 'email')) {
+      if (isDuplicateKeyError(error, "email")) {
         throw new Error(`User with email ${email} already exists`);
       }
-      if (isDuplicateKeyError(error, 'username')) {
+      if (isDuplicateKeyError(error, "username")) {
         throw new Error(`Username ${username} is already taken`);
       }
-      
-      throw new Error(`Failed to create user: ${error instanceof Error ? error.message : "Unknown error"}`);
+
+      throw new Error(
+        `Failed to create user: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
     }
   },
 
@@ -330,7 +382,7 @@ export const postgresqlAdapter: AuthDbAdapter = {
     try {
       const pool = await getPool();
       const tableName = getUserTableName();
-      
+
       // Build dynamic update query
       const updates: string[] = [];
       const values: any[] = [];
@@ -376,9 +428,17 @@ export const postgresqlAdapter: AuthDbAdapter = {
         updates.push(`profile_picture = $${paramCount++}`);
         values.push(data.profilePicture ? data.profilePicture.trim() : null);
       }
+      if (data.authMethod !== undefined) {
+        updates.push(`auth_method = $${paramCount++}`);
+        values.push(data.authMethod || null);
+      }
+      if (data.authProvider !== undefined) {
+        updates.push(`auth_provider = $${paramCount++}`);
+        values.push(data.authProvider || null);
+      }
 
       if (updates.length === 0) {
-        throw new Error('No valid fields to update');
+        throw new Error("No valid fields to update");
       }
 
       updates.push(`updated_at = NOW()`);
@@ -386,7 +446,7 @@ export const postgresqlAdapter: AuthDbAdapter = {
 
       const query = `
         UPDATE ${tableName} 
-        SET ${updates.join(', ')} 
+        SET ${updates.join(", ")} 
         WHERE id = $${paramCount} 
         RETURNING *
       `;
@@ -394,30 +454,37 @@ export const postgresqlAdapter: AuthDbAdapter = {
       const result = await pool.query(query, values);
 
       if (result.rows.length === 0) {
-        throw new Error('User not found');
+        throw new Error("User not found");
       }
 
       return rowToUser(result.rows[0]);
     } catch (error) {
       console.error("Error updating user:", error);
-      
+
       // Check for specific duplicate key errors
-      if (isDuplicateKeyError(error, 'email')) {
-        throw new Error(`Email ${data.email || 'unknown'} is already in use`);
+      if (isDuplicateKeyError(error, "email")) {
+        throw new Error(`Email ${data.email || "unknown"} is already in use`);
       }
-      if (isDuplicateKeyError(error, 'username')) {
-        throw new Error(`Username ${data.username || 'unknown'} is already taken`);
+      if (isDuplicateKeyError(error, "username")) {
+        throw new Error(
+          `Username ${data.username || "unknown"} is already taken`
+        );
       }
-      
+
       // Re-throw specific errors
-      if (error instanceof Error && error.message === 'User not found') {
+      if (error instanceof Error && error.message === "User not found") {
         throw error;
       }
-      if (error instanceof Error && error.message === 'No valid fields to update') {
+      if (
+        error instanceof Error &&
+        error.message === "No valid fields to update"
+      ) {
         throw error;
       }
-      
-      throw new Error(`Failed to update user: ${error instanceof Error ? error.message : "Unknown error"}`);
+
+      throw new Error(
+        `Failed to update user: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
     }
   },
 
@@ -425,7 +492,7 @@ export const postgresqlAdapter: AuthDbAdapter = {
     try {
       const pool = await getPool();
       const tableName = getTwoFactorTableName();
-      
+
       await pool.query(
         `INSERT INTO ${tableName} (id, user_id, code, hashed_code, type, expires_at, attempts, is_used, metadata) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -438,12 +505,14 @@ export const postgresqlAdapter: AuthDbAdapter = {
           code.expiresAt,
           code.attempts,
           code.isUsed,
-          JSON.stringify(code.metadata || {})
+          JSON.stringify(code.metadata || {}),
         ]
       );
     } catch (error) {
       console.error("Error storing two-factor code:", error);
-      throw new Error(`Failed to store two-factor code: ${error instanceof Error ? error.message : "Unknown error"}`);
+      throw new Error(
+        `Failed to store two-factor code: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
     }
   },
 
@@ -451,7 +520,7 @@ export const postgresqlAdapter: AuthDbAdapter = {
     try {
       const pool = await getPool();
       const tableName = getTwoFactorTableName();
-      
+
       const result = await pool.query(
         `SELECT * FROM ${tableName} WHERE id = $1 LIMIT 1`,
         [codeId]
@@ -466,11 +535,14 @@ export const postgresqlAdapter: AuthDbAdapter = {
     }
   },
 
-  async updateTwoFactorCode(codeId: string, updates: Partial<TwoFactorCode>): Promise<void> {
+  async updateTwoFactorCode(
+    codeId: string,
+    updates: Partial<TwoFactorCode>
+  ): Promise<void> {
     try {
       const pool = await getPool();
       const tableName = getTwoFactorTableName();
-      
+
       // Build dynamic update query
       const updateFields: string[] = [];
       const values: any[] = [];
@@ -495,22 +567,27 @@ export const postgresqlAdapter: AuthDbAdapter = {
 
       const query = `
         UPDATE ${tableName} 
-        SET ${updateFields.join(', ')} 
+        SET ${updateFields.join(", ")} 
         WHERE id = $${paramCount}
       `;
 
       await pool.query(query, values);
     } catch (error) {
       console.error("Error updating two-factor code:", error);
-      throw new Error(`Failed to update two-factor code: ${error instanceof Error ? error.message : "Unknown error"}`);
+      throw new Error(
+        `Failed to update two-factor code: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
     }
   },
 
-  async getUserTwoFactorCodes(userId: string, type?: string): Promise<TwoFactorCode[]> {
+  async getUserTwoFactorCodes(
+    userId: string,
+    type?: string
+  ): Promise<TwoFactorCode[]> {
     try {
       const pool = await getPool();
       const tableName = getTwoFactorTableName();
-      
+
       let query = `SELECT * FROM ${tableName} WHERE user_id = $1`;
       const values: any[] = [userId];
 
@@ -534,7 +611,7 @@ export const postgresqlAdapter: AuthDbAdapter = {
     try {
       const pool = await getPool();
       const tableName = getTwoFactorTableName();
-      
+
       const result = await pool.query(
         `DELETE FROM ${tableName} WHERE expires_at < NOW()`
       );

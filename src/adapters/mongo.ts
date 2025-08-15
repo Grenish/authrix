@@ -17,6 +17,8 @@ interface MongoUser {
   profilePicture?: string;
   lastLoginAt?: Date;
   loginCount?: number;
+  authMethod?: 'password' | 'sso';
+  authProvider?: string;
 }
 
 interface ConnectionConfig {
@@ -228,6 +230,8 @@ function mongoUserToAuthUser(user: MongoUser & { _id: ObjectId }): AuthUser {
   lastName: user.lastName,
   fullName: user.fullName,
   profilePicture: user.profilePicture,
+  authMethod: user.authMethod,
+  authProvider: user.authProvider,
   };
 }
 
@@ -253,6 +257,8 @@ export const mongoAdapter: AuthDbAdapter = {
       lastName: 1,
       fullName: 1,
       profilePicture: 1,
+          authMethod: 1,
+          authProvider: 1,
         }
       }
     );
@@ -286,6 +292,8 @@ export const mongoAdapter: AuthDbAdapter = {
       lastName: 1,
       fullName: 1,
       profilePicture: 1,
+          authMethod: 1,
+          authProvider: 1,
         }
       }
     );
@@ -293,7 +301,7 @@ export const mongoAdapter: AuthDbAdapter = {
     return user && user._id ? mongoUserToAuthUser(user as MongoUser & { _id: ObjectId }) : null;
   },
 
-  async createUser({ email, password, username, firstName, lastName, fullName, profilePicture }): Promise<AuthUser> {
+  async createUser({ email, password, username, firstName, lastName, fullName, profilePicture, authMethod, authProvider }): Promise<AuthUser> {
     const conn = MongoConnection.getInstance();
     const users = await conn.getUsers();
     
@@ -308,6 +316,8 @@ export const mongoAdapter: AuthDbAdapter = {
       emailVerified: false,
       twoFactorEnabled: false,
       loginCount: 0,
+  authMethod,
+  authProvider,
     };
 
   if (normalizedUsername) userData.username = normalizedUsername;
@@ -335,6 +345,8 @@ export const mongoAdapter: AuthDbAdapter = {
         lastName: lastName?.trim(),
         fullName: fullName?.trim(),
         profilePicture,
+  authMethod,
+  authProvider,
       };
     } catch (error: any) {
       if (error.code === 11000) {

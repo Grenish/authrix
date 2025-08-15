@@ -1,6 +1,7 @@
 import * as bcrypt from "bcryptjs";
 import * as argon2 from "argon2";
 import { createHash, randomBytes, timingSafeEqual } from "crypto";
+import { authConfig } from "../config";
 import { promisify } from "util";
 import { Worker } from "worker_threads";
 
@@ -66,7 +67,9 @@ class SecurityConfig {
   public readonly RATE_LIMIT_WINDOW = 60 * 1000;
 
   // Security pepper (should be stored securely, e.g., in environment variable or secret manager)
-  private readonly PEPPER: string;
+  private PEPPER: string;
+  private DEV_GENERATED = false;
+  private DEV_DERIVED = false;
 
   public readonly STRICT_MODE: boolean;
 
@@ -117,12 +120,33 @@ class SecurityConfig {
       this.MIN_ENTROPY = 30; // Allow lower entropy threshold; tests assert >50 for strong samples explicitly
     }
 
-    // Load pepper from secure storage
-    const pepper = process.env.AUTHRIX_PASSWORD_PEPPER;
-    if (!pepper && process.env.NODE_ENV === 'production') {
+    // Load pepper from secure storage with stable dev fallback
+    const envPepper = process.env.AUTHRIX_PASSWORD_PEPPER;
+    const isProd = process.env.NODE_ENV === 'production';
+    if (!envPepper && isProd) {
       throw new Error('AUTHRIX_PASSWORD_PEPPER must be configured in production');
     }
-    this.PEPPER = pepper || this.generateDefaultPepper();
+    if (envPepper) {
+      this.PEPPER = envPepper;
+    } else {
+      // Dev/test: derive a stable fallback from jwtSecret when available to avoid per-restart drift
+      const jwt = (authConfig && typeof authConfig.jwtSecret === 'string') ? authConfig.jwtSecret : '';
+      if (jwt && jwt.length >= 12) {
+        // Derive pepper deterministically from jwtSecret (dev-only). Do NOT rely on this in production.
+        this.PEPPER = createHash('sha256').update(`authrix-pepper:${jwt}`).digest('hex');
+        this.DEV_DERIVED = true;
+        // Minimal one-time warning
+        if (!process.env.AUTHRIX_SUPPRESS_DEV_PEPPER_WARNING) {
+          // eslint-disable-next-line no-console
+          console.warn('[Authrix] Using derived dev pepper from jwtSecret. Configure AUTHRIX_PASSWORD_PEPPER in production.');
+          process.env.AUTHRIX_SUPPRESS_DEV_PEPPER_WARNING = '1';
+        }
+      } else {
+        // Fallback to generated pepper (unstable across restarts) if jwtSecret is not initialized yet
+        this.PEPPER = this.generateDefaultPepper();
+        this.DEV_GENERATED = true;
+      }
+    }
 
     // Validate configuration on startup
     this.validateConfiguration();
@@ -144,9 +168,8 @@ class SecurityConfig {
     if (process.env.NODE_ENV === 'production') {
       throw new Error('Password pepper must be configured in production');
     }
-    console.warn(
-      "⚠️  DEVELOPMENT MODE: Using generated pepper. Configure AUTHRIX_PASSWORD_PEPPER before deploying to production!"
-    );
+  // eslint-disable-next-line no-console
+  console.warn("[Authrix] Dev pepper generated; set AUTHRIX_PASSWORD_PEPPER or jwtSecret for stability.");
     return randomBytes(32).toString("hex");
   }
 
@@ -162,6 +185,17 @@ class SecurityConfig {
   }
 
   public getPepper(): string {
+    // If dev generated pepper was used but jwtSecret is now available, upgrade to derived pepper once
+    if (!process.env.AUTHRIX_PASSWORD_PEPPER && this.DEV_GENERATED) {
+      const jwt = (authConfig && typeof authConfig.jwtSecret === 'string') ? authConfig.jwtSecret : '';
+      if (jwt && jwt.length >= 12) {
+        this.PEPPER = createHash('sha256').update(`authrix-pepper:${jwt}`).digest('hex');
+        this.DEV_GENERATED = false;
+        this.DEV_DERIVED = true;
+        // eslint-disable-next-line no-console
+        console.info('[Authrix] Switched to derived dev pepper from jwtSecret.');
+      }
+    }
     return this.PEPPER;
   }
 }

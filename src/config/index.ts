@@ -134,6 +134,17 @@ class AuthConfigSingleton {
     if (config.email) {
       initEmailServices(config.email);
     }
+
+    // Minimal init validation & optional log to aid setup
+    const isProd = process.env.NODE_ENV === 'production';
+    if (!this._jwtSecret || this._jwtSecret.length < 12) {
+      // eslint-disable-next-line no-console
+      console.warn('[Authrix] jwtSecret is short or missing. Set a strong secret via initAuth().');
+    }
+    if (isProd && !process.env.AUTHRIX_PASSWORD_PEPPER) {
+      // eslint-disable-next-line no-console
+      console.warn('[Authrix] AUTHRIX_PASSWORD_PEPPER is required in production and is currently missing.');
+    }
   }
 }
 

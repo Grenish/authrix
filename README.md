@@ -163,6 +163,23 @@ Access at runtime via `auth.config` (read-only snapshot / accessor pattern) if n
 
 ---
 
+## Environment Requirements
+
+- JWT_SECRET (required)
+  - A strong secret used to sign JWTs. Recommended length: 32+ characters.
+  - Required in all environments. Authrix will throw if missing when creating tokens.
+
+- AUTHRIX_PASSWORD_PEPPER (required in production)
+  - Additional secret applied during password hashing to harden stored hashes.
+  - Production: must be set explicitly. The library throws on startup if missing.
+  - Development: if not set, Authrix derives a stable pepper from `jwtSecret` when available; if `jwtSecret` is not yet initialized, a temporary pepper is generated and later upgraded once `jwtSecret` is set. Always configure a real pepper before deploying.
+
+Notes
+- Keep both secrets in a secure secret store (not in source control).
+- Rotating `jwtSecret` invalidates existing sessions. Plan for a rotation strategy if needed.
+
+---
+
 ## Unified API
 
 ```ts

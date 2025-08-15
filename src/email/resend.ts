@@ -1,4 +1,5 @@
 import { EmailService } from "../core/twoFactor";
+import type { EmailServiceCapabilities } from "../types/email";
 import type { Resend } from "resend";
 
 // Types
@@ -69,6 +70,13 @@ const PERMANENT_ERROR_PATTERNS = [
  * Optimized Resend Email Service
  */
 export class ResendEmailService implements EmailService {
+    public readonly capabilities: EmailServiceCapabilities = {
+        templates: true,
+        headers: true,
+        tracking: true,
+        tags: true,
+        replyTo: true
+    };
     private client?: Resend;
     private config: Required<Omit<ResendConfig, 'customTemplate'>> & { customTemplate?: EmailTemplate };
     private initPromise?: Promise<void>;
@@ -88,9 +96,7 @@ export class ResendEmailService implements EmailService {
         const fromName = config?.fromName || process.env.RESEND_FROM_NAME || 'Authrix';
 
         if (!apiKey) {
-            throw new Error(
-                'Resend requires RESEND_API_KEY. Get your API key from https://resend.com/api-keys'
-            );
+            throw new Error('RESEND_API_KEY is required. Create one at https://resend.com/api-keys');
         }
 
         if (!apiKey.startsWith('re_')) {
@@ -98,11 +104,11 @@ export class ResendEmailService implements EmailService {
         }
 
         if (!fromEmail) {
-            throw new Error('RESEND_FROM_EMAIL is required');
+            throw new Error('RESEND_FROM_EMAIL is required (verified sender or domain).');
         }
 
         if (!EMAIL_REGEX.test(fromEmail)) {
-            throw new Error('RESEND_FROM_EMAIL must be a valid email address');
+            throw new Error('RESEND_FROM_EMAIL must be a valid email address (e.g., no-reply@yourdomain.com)');
         }
 
         return {
@@ -179,11 +185,11 @@ export class ResendEmailService implements EmailService {
      */
     private validateEmailInputs(to: string, code: string): void {
         if (!to?.trim()) {
-            throw new Error('Recipient email is required');
+            throw new Error('Recipient email address is required');
         }
 
         if (!EMAIL_REGEX.test(to.trim())) {
-            throw new Error('Invalid email format');
+            throw new Error('Invalid recipient email address format');
         }
 
         if (!code?.trim()) {

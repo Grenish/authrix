@@ -1,4 +1,5 @@
 import { EmailService } from "../core/twoFactor";
+import type { EmailServiceCapabilities } from "../types/email";
 import type { Transporter } from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
@@ -78,6 +79,13 @@ const PERMANENT_ERROR_PATTERNS = [
  * Optimized SMTP Email Service
  */
 export class SMTPEmailService implements EmailService {
+    public readonly capabilities: EmailServiceCapabilities = {
+        templates: true,
+        headers: true,
+        tracking: false,
+        tags: false,
+        replyTo: true
+    };
     private transporter?: Transporter;
     private config: Required<Omit<SMTPConfig, 'customTemplate'>> & { customTemplate?: EmailTemplate };
     private initPromise?: Promise<void>;
@@ -101,11 +109,11 @@ export class SMTPEmailService implements EmailService {
 
         // Validate required fields
         if (!host || !user || !pass) {
-            const missing = [];
+            const missing = [] as string[];
             if (!host) missing.push('SMTP_HOST');
             if (!user) missing.push('SMTP_USER');
             if (!pass) missing.push('SMTP_PASS');
-            throw new Error(`Missing SMTP configuration: ${missing.join(', ')}`);
+            throw new Error(`Missing SMTP configuration. Required: ${missing.join(', ')}`);
         }
 
         // Validate host format
@@ -120,7 +128,7 @@ export class SMTPEmailService implements EmailService {
 
         // Validate email format
         if (from && !EMAIL_REGEX.test(from)) {
-            throw new Error('SMTP_FROM must be a valid email address');
+            throw new Error('SMTP_FROM must be a valid email address (e.g., no-reply@yourdomain.com)');
         }
 
         // Determine security settings
@@ -255,11 +263,11 @@ export class SMTPEmailService implements EmailService {
      */
     private validateEmailInputs(to: string, code: string): void {
         if (!to?.trim()) {
-            throw new Error('Recipient email is required');
+            throw new Error('Recipient email address is required');
         }
 
         if (!EMAIL_REGEX.test(to.trim())) {
-            throw new Error('Invalid email format');
+            throw new Error('Invalid recipient email address format');
         }
 
         if (!code?.trim()) {

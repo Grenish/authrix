@@ -141,6 +141,7 @@ import { mongoAdapter } from 'authrix/adapters/mongo';
 
 initAuth({
   jwtSecret: process.env.JWT_SECRET!,      // required, min 32 chars recommended
+  authPepper: process.env.AUTHRIX_PASSWORD_PEPPER, // optional explicit pepper override
   db: mongoAdapter,                        // optional if only stateless operations
   cookieName: 'auth_token',                // optional override
   forceSecureCookies: false,               // force Secure attr regardless of NODE_ENV
@@ -177,6 +178,7 @@ Access at runtime via `auth.config` (read-only snapshot / accessor pattern) if n
 Notes
 - Keep both secrets in a secure secret store (not in source control).
 - Rotating `jwtSecret` invalidates existing sessions. Plan for a rotation strategy if needed.
+ - `authPepper` (or `AUTHRIX_PASSWORD_PEPPER`) must be stable across restarts/environments. If unset in development, Authrix derives or generates a temporary value and can verify with the previous pepper once before rehashing.
 
 ---
 

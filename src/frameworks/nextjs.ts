@@ -467,11 +467,21 @@ export function createSignupHandler() {
       return Response.json({ error: 'Method not allowed' }, { status: 405 });
     }
     try {
-      const { email, password } = await request.json();
+      const body = await request.json();
+      const { email, password } = body || {};
       if (!email || !password) {
         return Response.json({ error: 'Email and password are required' }, { status: 400 });
       }
-      const result = await signupCore(email, password);
+      // Optional profile fields
+      const { username, firstName, lastName, fullName, profilePicture } = body || {};
+      const result = await signupCore(email, password, {
+        includeUserProfile: true,
+        username,
+        firstName,
+        lastName,
+        fullName,
+        profilePicture
+      });
       const response = Response.json({ success: true, user: result.user, message: 'Account created successfully' });
       const cookie = CookieUtils.createCookieString(CookieUtils.getCookieName(), result.token, { ...result.cookieOptions });
       response.headers.set('Set-Cookie', cookie);
@@ -613,11 +623,19 @@ export function createSignupHandlerPages() {
       return res.status(405).json({ error: 'Method not allowed' });
     }
     try {
-      const { email, password } = req.body;
+      const { email, password } = req.body || {};
       if (!email || !password) {
         return res.status(400).json({ error: 'Email and password are required' });
       }
-      const result = await signupCore(email, password);
+      const { username, firstName, lastName, fullName, profilePicture } = req.body || {};
+      const result = await signupCore(email, password, {
+        includeUserProfile: true,
+        username,
+        firstName,
+        lastName,
+        fullName,
+        profilePicture
+      });
       const cookie = CookieUtils.createCookieString(CookieUtils.getCookieName(), result.token, { ...result.cookieOptions });
       res.setHeader('Set-Cookie', cookie);
       return res.json({ success: true, user: result.user, message: 'Account created successfully' });

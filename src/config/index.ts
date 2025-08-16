@@ -15,6 +15,7 @@ class AuthConfigSingleton {
   private _sessionMaxAgeMs: number = 1000 * 60 * 60 * 24 * 7; // default 7d
   private _rollingSessionEnabled: boolean = false;
   private _rollingSessionThresholdSeconds: number = 60 * 60 * 24; // 24h remaining triggers refresh by default
+  private _authPepper?: string; // optional explicit password pepper override
 
   private constructor() {}
 
@@ -82,11 +83,20 @@ class AuthConfigSingleton {
     if (value > 0) this._rollingSessionThresholdSeconds = value;
   }
 
+  public get authPepper(): string | undefined {
+    return this._authPepper;
+  }
+
+  public set authPepper(value: string | undefined) {
+    this._authPepper = value;
+  }
+
   public init(config: {
     jwtSecret: string;
     db: AuthDbAdapter;
     cookieName?: string;
     forceSecureCookies?: boolean;
+  authPepper?: string;
     email?: {
       defaultService?: string;
       providers?: {
@@ -108,6 +118,9 @@ class AuthConfigSingleton {
   }) {
     this._jwtSecret = config.jwtSecret;
     this._db = config.db;
+    if (config.authPepper) {
+      this._authPepper = config.authPepper;
+    }
     
     if (config.cookieName) {
       this._cookieName = config.cookieName;
@@ -143,7 +156,7 @@ class AuthConfigSingleton {
     }
     if (isProd && !process.env.AUTHRIX_PASSWORD_PEPPER) {
       // eslint-disable-next-line no-console
-      console.warn('[Authrix] AUTHRIX_PASSWORD_PEPPER is required in production and is currently missing.');
+  console.warn('[Authrix] AUTHRIX_PASSWORD_PEPPER is required in production and is currently missing.');
     }
   }
 }
@@ -194,6 +207,12 @@ export const authConfig = {
   },
   set rollingSessionThresholdSeconds(value: number) {
     authConfigInstance.rollingSessionThresholdSeconds = value;
+  },
+  get authPepper() {
+    return authConfigInstance.authPepper;
+  },
+  set authPepper(value: string | undefined) {
+    authConfigInstance.authPepper = value;
   }
 };
 
@@ -202,6 +221,7 @@ export function initAuth(config: {
   db: AuthDbAdapter;
   cookieName?: string;
   forceSecureCookies?: boolean;
+  authPepper?: string;
   email?: {
     defaultService?: string;
     providers?: {

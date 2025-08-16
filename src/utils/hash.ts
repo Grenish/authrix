@@ -70,11 +70,23 @@ class SecurityConfig {
   private PEPPER: string;
   private DEV_GENERATED = false;
   private DEV_DERIVED = false;
+  private PREV_PEPPER?: string; // keep last pepper to verify legacy hashes during dev switches
 
   public readonly STRICT_MODE: boolean;
+  public readonly ALLOW_PREV_PEPPER_FALLBACK: boolean;
 
   constructor() {
     this.STRICT_MODE = (process.env.AUTHRIX_STRICT_PASSWORD_POLICY || '').toLowerCase() === 'true';
+
+    // Allow previous-pepper verification fallback (primarily for dev ergonomics)
+    // Defaults: enabled in non-production when unset; can be forced on/off via env
+    const rawPrevPepperFlag = (process.env.AUTHRIX_ALLOW_PREV_PEPPER_FALLBACK || '').toLowerCase();
+    const parsedPrevFlag = rawPrevPepperFlag === 'true' || rawPrevPepperFlag === '1' || rawPrevPepperFlag === 'yes'
+      ? true
+      : rawPrevPepperFlag === 'false' || rawPrevPepperFlag === '0' || rawPrevPepperFlag === 'no'
+        ? false
+        : undefined;
+    this.ALLOW_PREV_PEPPER_FALLBACK = typeof parsedPrevFlag === 'boolean' ? parsedPrevFlag : (process.env.NODE_ENV !== 'production');
 
     // Parse bcrypt rounds (allow lower rounds in non-strict/dev mode for test compatibility)
     const envRounds = parseInt(process.env.AUTHRIX_BCRYPT_ROUNDS || "", 10);
@@ -121,12 +133,15 @@ class SecurityConfig {
     }
 
     // Load pepper from secure storage with stable dev fallback
+    const explicitPepper = authConfig?.authPepper;
     const envPepper = process.env.AUTHRIX_PASSWORD_PEPPER;
     const isProd = process.env.NODE_ENV === 'production';
-    if (!envPepper && isProd) {
+    if (!explicitPepper && !envPepper && isProd) {
       throw new Error('AUTHRIX_PASSWORD_PEPPER must be configured in production');
     }
-    if (envPepper) {
+    if (explicitPepper) {
+      this.PEPPER = explicitPepper;
+    } else if (envPepper) {
       this.PEPPER = envPepper;
     } else {
       // Dev/test: derive a stable fallback from jwtSecret when available to avoid per-restart drift
@@ -186,9 +201,11 @@ class SecurityConfig {
 
   public getPepper(): string {
     // If dev generated pepper was used but jwtSecret is now available, upgrade to derived pepper once
-    if (!process.env.AUTHRIX_PASSWORD_PEPPER && this.DEV_GENERATED) {
+  if (!authConfig?.authPepper && !process.env.AUTHRIX_PASSWORD_PEPPER && this.DEV_GENERATED) {
       const jwt = (authConfig && typeof authConfig.jwtSecret === 'string') ? authConfig.jwtSecret : '';
       if (jwt && jwt.length >= 12) {
+        // Preserve previous pepper to allow legacy hash verification then rehash
+        this.PREV_PEPPER = this.PEPPER;
         this.PEPPER = createHash('sha256').update(`authrix-pepper:${jwt}`).digest('hex');
         this.DEV_GENERATED = false;
         this.DEV_DERIVED = true;
@@ -197,6 +214,14 @@ class SecurityConfig {
       }
     }
     return this.PEPPER;
+  }
+
+  public getPreviousPepper(): string | undefined {
+    return this.PREV_PEPPER;
+  }
+
+  public getAllowPrevPepperFallback(): boolean {
+    return this.ALLOW_PREV_PEPPER_FALLBACK;
   }
 }
 
@@ -653,23 +678,42 @@ class PasswordHasher {
     }
 
     try {
-      // Apply pepper
-      const pepperedPassword = this.applyPepper(password, config.getPepper());
+      // Apply pepper (current)
+      const currentPepper = config.getPepper();
+      const pepperedPassword = this.applyPepper(password, currentPepper);
 
       let valid = false;
       let needsRehash = false;
 
-      // Determine hash type and verify
-      if (hash.startsWith("$argon2")) {
-        valid = await argon2.verify(hash, pepperedPassword);
-        needsRehash = this.needsArgon2Rehash(hash);
-      } else if (hash.startsWith("$2")) {
-        valid = await bcrypt.compare(pepperedPassword, hash);
-        needsRehash = this.needsBcryptRehash(hash);
-      } else {
-        // Unknown hash format, perform dummy operation
-        await this.dummyVerify();
-        return { valid: false, needsRehash: true };
+      const tryVerify = async (peppered: string) => {
+        if (hash.startsWith("$argon2")) {
+          const ok = await argon2.verify(hash, peppered);
+          return { ok, rehash: this.needsArgon2Rehash(hash) };
+        } else if (hash.startsWith("$2")) {
+          const ok = await bcrypt.compare(peppered, hash);
+          return { ok, rehash: this.needsBcryptRehash(hash) };
+        } else {
+          await this.dummyVerify();
+          return { ok: false, rehash: true };
+        }
+      };
+
+      // First attempt with current pepper
+      const first = await tryVerify(pepperedPassword);
+      valid = first.ok;
+      needsRehash = first.rehash;
+
+      // If invalid, but we have a previous pepper (dev switch), try once more and flag rehash
+      if (!valid) {
+        const prev = config.getPreviousPepper?.();
+        if (prev && config.getAllowPrevPepperFallback()) {
+          const second = await tryVerify(this.applyPepper(password, prev));
+          if (second.ok) {
+            valid = true;
+            // Force rehash to migrate to current pepper
+            needsRehash = true;
+          }
+        }
       }
 
       return { valid, needsRehash };

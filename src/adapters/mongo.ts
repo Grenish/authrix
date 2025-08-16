@@ -31,7 +31,43 @@ interface ConnectionConfig {
     minPoolSize?: number;
     socketTimeoutMS?: number;
     serverSelectionTimeoutMS?: number;
+  retryConnect?: boolean;
+  retryAttempts?: number;
   };
+}
+
+// Runtime configuration override (takes precedence over env when set)
+type ConnectionOverride = Partial<ConnectionConfig>;
+let mongoConfigOverride: ConnectionOverride | null = null;
+let warnedMongoDbAlias = false;
+
+/**
+ * Parse a MongoDB URI to extract dbName if present.
+ * Supports mongodb:// and mongodb+srv:// forms.
+ */
+export function parseMongoUri(uri: string): { dbName?: string } {
+  try {
+    // Use URL for simple extraction; fallback to regex when needed
+    const u = new URL(uri);
+    const path = u.pathname || "";
+    if (path && path !== "/") {
+      const name = path.replace(/^\//, "");
+      if (name) return { dbName: decodeURIComponent(name) };
+    }
+  } catch {
+    // Fallback regex extraction
+    const m = uri.match(/^mongodb(?:\+srv)?:\/\/[^/]+\/([^?]+)/i);
+    if (m && m[1]) return { dbName: decodeURIComponent(m[1]) };
+  }
+  return {};
+}
+
+/**
+ * Configure a global adapter override without mutating process.env.
+ * The env-driven mongoAdapter will honor this when present.
+ */
+export function configureMongoAdapter(opts: ConnectionOverride): void {
+  mongoConfigOverride = { ...(mongoConfigOverride || {}), ...opts };
 }
 
 // Connection management with singleton pattern
@@ -44,6 +80,7 @@ class MongoConnection {
   private config: ConnectionConfig | null = null;
   private connectionPromise: Promise<void> | null = null;
   private isConnected = false;
+  private static indexSignatureCreated = new Set<string>();
 
   private constructor() {}
 
@@ -57,19 +94,43 @@ class MongoConnection {
   private loadConfig(): ConnectionConfig {
     if (this.config) return this.config;
 
-    const uri = process.env.MONGO_URI;
-    const dbName = process.env.DB_NAME;
-    const authCollection = process.env.AUTH_COLLECTION || 'users';
-    const twoFactorCollection = process.env.TWO_FACTOR_COLLECTION || 'two_factor_codes';
+    // Prefer override if provided, else env
+    let uri = mongoConfigOverride?.uri || process.env.MONGO_URI;
+    let dbName = mongoConfigOverride?.dbName || process.env.DB_NAME;
+    const legacyDb = process.env.MONGO_DB;
+    const authCollection = mongoConfigOverride?.authCollection || process.env.AUTH_COLLECTION || 'users';
+    const twoFactorCollection = mongoConfigOverride?.twoFactorCollection || process.env.TWO_FACTOR_COLLECTION || 'two_factor_codes';
+
+    // Accept legacy alias MONGO_DB with one-time warning
+    if (!dbName && legacyDb) {
+      dbName = legacyDb;
+      if (!warnedMongoDbAlias) {
+        try { console.warn('[Authrix][Mongo] MONGO_DB is deprecated. Use DB_NAME instead.'); } catch {}
+        warnedMongoDbAlias = true;
+      }
+    }
+
+    // If dbName missing but URI contains a path, infer it
+    if (!dbName && uri) {
+      const parsed = parseMongoUri(uri);
+      if (parsed.dbName) dbName = parsed.dbName;
+    }
 
     if (!uri || !dbName) {
+      const missing = [!uri && 'MONGO_URI', !dbName && 'DB_NAME'].filter(Boolean).join(', ');
+      const envPresence = {
+        MONGO_URI: typeof process?.env?.MONGO_URI !== 'undefined',
+        DB_NAME: typeof process?.env?.DB_NAME !== 'undefined',
+        NEXT_RUNTIME: process?.env?.NEXT_RUNTIME || undefined
+      } as const;
+      const nextHint = 'Next.js tip: If using App Router, add `export const runtime = "nodejs"` to route files or include the database in the URI path (mongodb://host:port/mydb).';
       throw new Error(
-        'Missing required MongoDB environment variables:\n' +
-        '- MONGO_URI: MongoDB connection string\n' +
-        '- DB_NAME: Database name\n' +
-        'Optional:\n' +
-        '- AUTH_COLLECTION: Users collection name (default: "users")\n' +
-        '- TWO_FACTOR_COLLECTION: 2FA codes collection name (default: "two_factor_codes")'
+        'Missing required MongoDB configuration: ' + missing + '\n' +
+        'Provide via environment (MONGO_URI, DB_NAME) or configure at runtime.\n' +
+        'Example (env): MONGO_URI=mongodb://127.0.0.1:27017, DB_NAME=authrix_next\n' +
+        'Example (factory): createMongoAdapter({ uri: "mongodb://127.0.0.1:27017/mydb" })\n' +
+        `[Env presence] MONGO_URI: ${envPresence.MONGO_URI}, DB_NAME: ${envPresence.DB_NAME}, NEXT_RUNTIME: ${envPresence.NEXT_RUNTIME || 'n/a'}\n` +
+        nextHint
       );
     }
 
@@ -88,10 +149,10 @@ class MongoConnection {
       authCollection,
       twoFactorCollection,
       options: {
-        maxPoolSize: parseInt(process.env.MONGO_MAX_POOL_SIZE || '10'),
-        minPoolSize: parseInt(process.env.MONGO_MIN_POOL_SIZE || '2'),
-        socketTimeoutMS: parseInt(process.env.MONGO_SOCKET_TIMEOUT || '30000'),
-        serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT || '5000'),
+        maxPoolSize: mongoConfigOverride?.options?.maxPoolSize ?? parseInt(process.env.MONGO_MAX_POOL_SIZE || '10'),
+        minPoolSize: mongoConfigOverride?.options?.minPoolSize ?? parseInt(process.env.MONGO_MIN_POOL_SIZE || '2'),
+        socketTimeoutMS: mongoConfigOverride?.options?.socketTimeoutMS ?? parseInt(process.env.MONGO_SOCKET_TIMEOUT || '30000'),
+        serverSelectionTimeoutMS: mongoConfigOverride?.options?.serverSelectionTimeoutMS ?? parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT || '5000'),
       }
     };
 
@@ -130,8 +191,26 @@ class MongoConnection {
         serverSelectionTimeoutMS: config.options?.serverSelectionTimeoutMS,
         ...tlsOptions
       });
-
-      await this.client.connect();
+      // Optional retry with simple backoff
+      const attempts = config.options?.retryConnect ? (config.options?.retryAttempts || 3) : 1;
+      let connectErr: any = null;
+      for (let i = 1; i <= attempts; i++) {
+        try {
+          await this.client.connect();
+          connectErr = null;
+          break;
+        } catch (e) {
+          connectErr = e;
+          if (i < attempts) {
+            await new Promise(r => setTimeout(r, 200 * i));
+          }
+        }
+      }
+      if (connectErr) {
+        const msg = connectErr instanceof Error ? connectErr.message : String(connectErr);
+        const srvHint = config.uri.startsWith('mongodb+srv://') ? ' Hint: For mongodb+srv, verify DNS/TLS and IP allowlist.' : '';
+        throw new Error(`Connect failed after ${attempts} attempt(s): ${msg}.${srvHint}`);
+      }
       this.db = this.client.db(config.dbName);
       this.usersCollection = this.db.collection<MongoUser>(config.authCollection);
       this.twoFactorCollection = this.db.collection<TwoFactorCode>(config.twoFactorCollection);
@@ -148,7 +227,10 @@ class MongoConnection {
 
   private async createIndexes(): Promise<void> {
     if (!this.usersCollection || !this.twoFactorCollection) return;
-
+  // Prevent duplicate index creation work across reloads
+  const cfg = this.loadConfig();
+  const signature = `${cfg.dbName}|${cfg.authCollection}|${cfg.twoFactorCollection}`;
+  if (MongoConnection.indexSignatureCreated.has(signature)) return;
     // Define indexes with options
     const userIndexes: Array<[IndexSpecification, CreateIndexesOptions?]> = [
       [{ email: 1 }, { unique: true, background: true }],
@@ -173,6 +255,7 @@ class MongoConnection {
         this.twoFactorCollection!.createIndex(spec, options).catch(() => {})
       ),
     ]);
+  MongoConnection.indexSignatureCreated.add(signature);
   }
 
   async getUsers(): Promise<Collection<MongoUser>> {
@@ -521,3 +604,45 @@ export const mongoUtils = {
     }
   },
 };
+
+/**
+ * Create a Mongo adapter with explicit options (no env required).
+ * If dbName is omitted but present in the URI path, it will be inferred.
+ */
+export function createMongoAdapter(options: Partial<ConnectionConfig> & { uri?: string; dbName?: string }): AuthDbAdapter {
+  // Prefer explicit options; fallback to env when omitted
+  const envUri = process.env.MONGO_URI;
+  const uri = options.uri || envUri;
+  if (!uri) {
+    throw new Error(
+      "createMongoAdapter called without uri and MONGO_URI not set. " +
+      "Next.js tip: ensure route handlers run on Node (export const runtime = 'nodejs') and .env.local is at the project root."
+    );
+  }
+
+  // Resolve dbName: explicit > inferred from URI path > env DB_NAME
+  const inferred = !options.dbName ? parseMongoUri(uri) : {};
+  const dbName = options.dbName || inferred.dbName || process.env.DB_NAME;
+
+  // Build override without undefineds
+  const override: ConnectionOverride = { uri };
+  if (dbName) override.dbName = dbName;
+  if (options.authCollection) override.authCollection = options.authCollection;
+  if (options.twoFactorCollection) override.twoFactorCollection = options.twoFactorCollection;
+  if (options.options) override.options = options.options;
+
+  // Set a scoped override and return the same adapter object;
+  // MongoConnection is a singleton so subsequent calls reuse it.
+  configureMongoAdapter(override);
+  return mongoAdapter;
+}
+
+/** Small wrapper returning richer health info */
+export async function healthCheckMongo(): Promise<{ ok: boolean; message?: string }> {
+  try {
+    const ok = await mongoUtils.healthCheck();
+    return ok ? { ok: true } : { ok: false, message: 'Query failed' };
+  } catch (e: any) {
+    return { ok: false, message: e?.message || 'Unknown error' };
+  }
+}

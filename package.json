@@ -141,6 +141,7 @@
     "dev": "tsup --watch",
     "prepare": "npm run build",
     "prepack": "npm run build",
+  "test:pepper": "npm run build && node scripts/hash-pepper-tests.cjs",
     "link:local": "npm run build && npm link",
     "unlink:local": "npm unlink -g authrix",
     "test:build": "npm run build && node -e \"console.log('Build test passed')\"",

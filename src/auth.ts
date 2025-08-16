@@ -87,12 +87,65 @@ async function resolveHandler(name: string) {
   if (!fnFactory) throw new Error(`Unknown handler ${name}`);
   return fnFactory();
 }
-const handlers = {
-  signup: () => resolveHandler('signup'),
-  signin: () => resolveHandler('signin'),
-  logout: () => resolveHandler('logout'),
-  currentUser: () => resolveHandler('currentUser'),
-  validateToken: () => resolveHandler('validateToken')
+type NextRouteHandler = (request: Request) => Promise<Response>;
+
+/**
+ * Next.js App Router compatible handlers.
+ * Usage in app route: `export const POST = auth.handlers.signup;`
+ * Each handler is a request-bound wrapper that always returns a Response.
+ */
+const handlers: {
+  signup: NextRouteHandler;
+  signin: NextRouteHandler;
+  logout: NextRouteHandler;
+  currentUser: NextRouteHandler;
+  validateToken: NextRouteHandler;
+} = {
+  signup: async (request: Request) => {
+    try {
+      const h = await resolveHandler('signup');
+      return h(request);
+    } catch (err: any) {
+      const message = err?.message || 'Signup handler unavailable';
+      return Response.json({ success: false, error: { message } }, { status: 500 });
+    }
+  },
+  signin: async (request: Request) => {
+    try {
+      const h = await resolveHandler('signin');
+      return h(request);
+    } catch (err: any) {
+      const message = err?.message || 'Signin handler unavailable';
+      return Response.json({ success: false, error: { message } }, { status: 500 });
+    }
+  },
+  logout: async (request: Request) => {
+    try {
+      const h = await resolveHandler('logout');
+      return h(request);
+    } catch (err: any) {
+      const message = err?.message || 'Logout handler unavailable';
+      return Response.json({ success: false, error: { message } }, { status: 500 });
+    }
+  },
+  currentUser: async (request: Request) => {
+    try {
+      const h = await resolveHandler('currentUser');
+      return h(request);
+    } catch (err: any) {
+      const message = err?.message || 'Current user handler unavailable';
+      return Response.json({ success: false, error: { message } }, { status: 500 });
+    }
+  },
+  validateToken: async (request: Request) => {
+    try {
+      const h = await resolveHandler('validateToken');
+      return h(request);
+    } catch (err: any) {
+      const message = err?.message || 'Token validation handler unavailable';
+      return Response.json({ success: false, error: { message } }, { status: 500 });
+    }
+  }
 };
 
 const cookies = {

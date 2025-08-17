@@ -1,10 +1,8 @@
 import type { AuthDbAdapter } from "../types/db";
 import { EmailServiceRegistry } from "../core/emailRegistry";
-import { createRequire } from "module";
-const __req = createRequire(import.meta.url);
 
 // Use a global symbol to ensure true singleton across module boundaries
-const AUTHRIX_CONFIG_KEY = Symbol.for('authrix.config.singleton');
+const AUTHRIX_CONFIG_KEY = Symbol.for("authrix.config.singleton");
 
 // Singleton pattern to ensure authConfig is shared across all modules
 class AuthConfigSingleton {
@@ -96,7 +94,7 @@ class AuthConfigSingleton {
     db: AuthDbAdapter;
     cookieName?: string;
     forceSecureCookies?: boolean;
-  authPepper?: string;
+    authPepper?: string;
     email?: {
       defaultService?: string;
       providers?: {
@@ -113,7 +111,7 @@ class AuthConfigSingleton {
       rolling?: {
         enabled?: boolean;
         thresholdSeconds?: number;
-      }
+      };
     };
   }) {
     this._jwtSecret = config.jwtSecret;
@@ -121,42 +119,48 @@ class AuthConfigSingleton {
     if (config.authPepper) {
       this._authPepper = config.authPepper;
     }
-    
+
     if (config.cookieName) {
       this._cookieName = config.cookieName;
     }
-    if (typeof config.forceSecureCookies === 'boolean') {
+    if (typeof config.forceSecureCookies === "boolean") {
       this._forceSecureCookies = config.forceSecureCookies;
     }
 
     if (config.session) {
-      if (typeof config.session.maxAgeMs === 'number') {
+      if (typeof config.session.maxAgeMs === "number") {
         this._sessionMaxAgeMs = config.session.maxAgeMs;
       }
       if (config.session.rolling) {
-        if (typeof config.session.rolling.enabled === 'boolean') {
+        if (typeof config.session.rolling.enabled === "boolean") {
           this._rollingSessionEnabled = config.session.rolling.enabled;
         }
-        if (typeof config.session.rolling.thresholdSeconds === 'number') {
-          this._rollingSessionThresholdSeconds = config.session.rolling.thresholdSeconds;
+        if (typeof config.session.rolling.thresholdSeconds === "number") {
+          this._rollingSessionThresholdSeconds =
+            config.session.rolling.thresholdSeconds;
         }
       }
     }
 
     // Optional: initialize email services explicitly based on config
     if (config.email) {
-      initEmailServices(config.email);
+      // Fire-and-forget; email providers are registered asynchronously
+      void initEmailServices(config.email);
     }
 
     // Minimal init validation & optional log to aid setup
-    const isProd = process.env.NODE_ENV === 'production';
+    const isProd = process.env.NODE_ENV === "production";
     if (!this._jwtSecret || this._jwtSecret.length < 12) {
       // eslint-disable-next-line no-console
-      console.warn('[Authrix] jwtSecret is short or missing. Set a strong secret via initAuth().');
+      console.warn(
+        "[Authrix] jwtSecret is short or missing. Set a strong secret via initAuth()."
+      );
     }
     if (isProd && !process.env.AUTHRIX_PASSWORD_PEPPER) {
       // eslint-disable-next-line no-console
-  console.warn('[Authrix] AUTHRIX_PASSWORD_PEPPER is required in production and is currently missing.');
+      console.warn(
+        "[Authrix] AUTHRIX_PASSWORD_PEPPER is required in production and is currently missing."
+      );
     }
   }
 }
@@ -213,7 +217,7 @@ export const authConfig = {
   },
   set authPepper(value: string | undefined) {
     authConfigInstance.authPepper = value;
-  }
+  },
 };
 
 export function initAuth(config: {
@@ -238,7 +242,7 @@ export function initAuth(config: {
     rolling?: {
       enabled?: boolean;
       thresholdSeconds?: number;
-    }
+    };
   };
 }) {
   authConfigInstance.init(config);
@@ -259,14 +263,14 @@ export function getAuthrixStatus() {
   return {
     jwtSecret: authConfigInstance.jwtSecret ? "[PRESENT]" : "[MISSING]",
     db: authConfigInstance.db ? "[CONFIGURED]" : "[NOT CONFIGURED]",
-    cookieName: authConfigInstance.cookieName
+    cookieName: authConfigInstance.cookieName,
   };
 }
 
 /**
  * Explicit email services initialization (config-first with env fallback)
  */
-export function initEmailServices(config?: {
+export async function initEmailServices(config?: {
   defaultService?: string;
   defaultEmailService?: string; // alias
   providers?: {
@@ -282,90 +286,119 @@ export function initEmailServices(config?: {
 
   // Always register console (dev-friendly)
   try {
-    const { ConsoleEmailService } = __req('../email/console');
-    EmailServiceRegistry.register('console', new ConsoleEmailService());
+    const mod = await import("../email/console");
+    EmailServiceRegistry.register("console", new mod.ConsoleEmailService());
   } catch {}
 
   // Configured providers take precedence
   if (config?.providers?.resend) {
     try {
-      const { ResendEmailService } = __req('../email/resend');
-  const svc = new ResendEmailService(config.providers.resend);
-  EmailServiceRegistry.register('resend', svc);
-  if (svc.capabilities) EmailServiceRegistry.setCapabilities('resend', svc.capabilities);
+      const mod = await import("../email/resend");
+      const svc = new mod.ResendEmailService(config.providers.resend);
+      EmailServiceRegistry.register("resend", svc);
+      if (svc.capabilities)
+        EmailServiceRegistry.setCapabilities("resend", svc.capabilities);
     } catch {}
   }
   if (config?.providers?.sendgrid) {
     try {
-      const { SendGridEmailService } = __req('../email/sendgrid');
-  const svc = new SendGridEmailService(config.providers.sendgrid);
-  EmailServiceRegistry.register('sendgrid', svc);
-  if (svc.capabilities) EmailServiceRegistry.setCapabilities('sendgrid', svc.capabilities);
+      const mod = await import("../email/sendgrid");
+      const svc = new mod.SendGridEmailService(config.providers.sendgrid);
+      EmailServiceRegistry.register("sendgrid", svc);
+      if (svc.capabilities)
+        EmailServiceRegistry.setCapabilities("sendgrid", svc.capabilities);
     } catch {}
   }
   if (config?.providers?.gmail) {
     try {
-      const { GmailEmailService } = __req('../email/gmail');
-  const svc = new GmailEmailService(config.providers.gmail);
-  EmailServiceRegistry.register('gmail', svc);
-  if (svc.capabilities) EmailServiceRegistry.setCapabilities('gmail', svc.capabilities);
+      const mod = await import("../email/gmail");
+      const svc = new mod.GmailEmailService(config.providers.gmail);
+      EmailServiceRegistry.register("gmail", svc);
+      if (svc.capabilities)
+        EmailServiceRegistry.setCapabilities("gmail", svc.capabilities);
     } catch {}
   }
   if (config?.providers?.smtp) {
     try {
-      const { SMTPEmailService } = __req('../email/customSMTP');
-  const svc = new SMTPEmailService(config.providers.smtp);
-  EmailServiceRegistry.register('smtp', svc);
-  if (svc.capabilities) EmailServiceRegistry.setCapabilities('smtp', svc.capabilities);
+      const mod = await import("../email/customSMTP");
+      const svc = new mod.SMTPEmailService(config.providers.smtp);
+      EmailServiceRegistry.register("smtp", svc);
+      if (svc.capabilities)
+        EmailServiceRegistry.setCapabilities("smtp", svc.capabilities);
     } catch {}
   }
 
   // Env-based auto-detect if enabled
   if (autoDetect) {
     try {
-      if (process.env.RESEND_API_KEY && !EmailServiceRegistry.get('resend')) {
-        const { ResendEmailService } = __req('../email/resend');
-  const svc = new ResendEmailService();
-  EmailServiceRegistry.register('resend', svc);
-  if (svc.capabilities) EmailServiceRegistry.setCapabilities('resend', svc.capabilities);
+      if (process.env.RESEND_API_KEY && !EmailServiceRegistry.get("resend")) {
+        const mod = await import("../email/resend");
+        const svc = new mod.ResendEmailService();
+        EmailServiceRegistry.register("resend", svc);
+        if (svc.capabilities)
+          EmailServiceRegistry.setCapabilities("resend", svc.capabilities);
       }
     } catch {}
     try {
-      if (process.env.SENDGRID_API_KEY && !EmailServiceRegistry.get('sendgrid')) {
-        const { SendGridEmailService } = __req('../email/sendgrid');
-  const svc = new SendGridEmailService();
-  EmailServiceRegistry.register('sendgrid', svc);
-  if (svc.capabilities) EmailServiceRegistry.setCapabilities('sendgrid', svc.capabilities);
+      if (
+        process.env.SENDGRID_API_KEY &&
+        !EmailServiceRegistry.get("sendgrid")
+      ) {
+        const mod = await import("../email/sendgrid");
+        const svc = new mod.SendGridEmailService();
+        EmailServiceRegistry.register("sendgrid", svc);
+        if (svc.capabilities)
+          EmailServiceRegistry.setCapabilities("sendgrid", svc.capabilities);
       }
     } catch {}
     try {
-      if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD && !EmailServiceRegistry.get('gmail')) {
-        const { GmailEmailService } = __req('../email/gmail');
-  const svc = new GmailEmailService();
-  EmailServiceRegistry.register('gmail', svc);
-  if (svc.capabilities) EmailServiceRegistry.setCapabilities('gmail', svc.capabilities);
+      if (
+        process.env.GMAIL_USER &&
+        process.env.GMAIL_APP_PASSWORD &&
+        !EmailServiceRegistry.get("gmail")
+      ) {
+        const mod = await import("../email/gmail");
+        const svc = new mod.GmailEmailService();
+        EmailServiceRegistry.register("gmail", svc);
+        if (svc.capabilities)
+          EmailServiceRegistry.setCapabilities("gmail", svc.capabilities);
       }
     } catch {}
     try {
-      if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS && !EmailServiceRegistry.get('smtp')) {
-        const { SMTPEmailService } = __req('../email/customSMTP');
-  const svc = new SMTPEmailService();
-  EmailServiceRegistry.register('smtp', svc);
-  if (svc.capabilities) EmailServiceRegistry.setCapabilities('smtp', svc.capabilities);
+      if (
+        process.env.SMTP_HOST &&
+        process.env.SMTP_USER &&
+        process.env.SMTP_PASS &&
+        !EmailServiceRegistry.get("smtp")
+      ) {
+        const mod = await import("../email/customSMTP");
+        const svc = new mod.SMTPEmailService();
+        EmailServiceRegistry.register("smtp", svc);
+        if (svc.capabilities)
+          EmailServiceRegistry.setCapabilities("smtp", svc.capabilities);
       }
     } catch {}
   }
 
   // Set default service
-  const explicit = config?.defaultService || config?.defaultEmailService || process.env.DEFAULT_EMAIL_SERVICE;
-  const priority = ['resend', 'sendgrid', 'gmail', 'smtp', 'console'];
+  const explicit =
+    config?.defaultService ||
+    config?.defaultEmailService ||
+    process.env.DEFAULT_EMAIL_SERVICE;
+  const priority = ["resend", "sendgrid", "gmail", "smtp", "console"];
   if (explicit && EmailServiceRegistry.get(explicit)) {
     EmailServiceRegistry.setDefault(explicit);
   } else {
     for (const name of priority) {
-      if (EmailServiceRegistry.get(name)) { EmailServiceRegistry.setDefault(name); break; }
+      if (EmailServiceRegistry.get(name)) {
+        EmailServiceRegistry.setDefault(name);
+        break;
+      }
     }
   }
 
-  return { services: EmailServiceRegistry.list(), default: EmailServiceRegistry.getDefault() ? 'set' : null };
+  return {
+    services: EmailServiceRegistry.list(),
+    default: EmailServiceRegistry.getDefault() ? "set" : null,
+  };
 }

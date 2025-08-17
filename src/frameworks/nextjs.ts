@@ -457,7 +457,7 @@ export function withAuth<T extends Record<string, any>, U extends Record<string,
 
 // === Flexible Functions with explicit naming ===
 
-// (Original flexible exports moved to deprecation wrappers later in file)
+// (Flexible legacy exports removed as part of deprecation cleanup)
 
 // === API Route Handlers ===
 
@@ -853,15 +853,4 @@ export function createAuthenticatedResponse(
   return response;
 }
 
-// --- Deprecation Wrappers (P1) ---
-const _depEmitted = new Set<string>();
-function warnDep(oldName: string, newUsage: string) {
-  if (process.env.NODE_ENV === 'production') return;
-  const key = `${oldName}->${newUsage}`;
-  if (_depEmitted.has(key)) return;
-  _depEmitted.add(key);
-  console.warn(`[AUTHRIX][DEPRECATION] ${oldName} is deprecated. Use ${newUsage} instead.`);
-}
-
-// Wrap flexible variants with deprecation warning (will later point to unified API)
-// Legacy variant exports removed in favor of unified namespace API.
+// Deprecation wrappers removed.

@@ -1,4 +1,3 @@
-// Error handling utilities - separate module for optional import
 export { errorHandler } from "./utils/response";
 export {
   AuthrixError,
@@ -10,10 +9,8 @@ export {
   InternalServerError,
 } from "./utils/errors";
 
-// Response helpers
 export { sendSuccess, sendError } from "./utils/response";
 
-// Hash / password utilities (security helpers)
 export {
   hashPassword,
   verifyPassword,
@@ -23,5 +20,4 @@ export {
   needsRehash
 } from './utils/hash';
 
-// Logger utilities
 export { logger, createLogger, reconfigureLogger } from './utils/logger';

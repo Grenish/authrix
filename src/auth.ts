@@ -7,7 +7,6 @@ import { signinCore, type SigninOptions, type SigninResult } from './core/signin
 import { logoutCore, type LogoutOptions, type LogoutResult } from './core/logout';
 import { getCurrentUserFromToken, isTokenValid } from './core/session';
 import { internalCookies } from './internal/cookies';
-import { warnDep } from './internal/deprecations';
 import { requireAuth } from './core/requireAuth';
 import { authConfig } from './config';
 

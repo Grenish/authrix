@@ -137,6 +137,5 @@ export const forgotPasswordHelpers = {
     resetPasswordWithCode(email, code, newPassword, options)
 };
 
-// Backwards-compatible named exports for tree-shaking (optional use)
 export const generateState = (data?: any) => generateSSOState(data);
 export const verifyState = (state: string, maxAge?: number) => verifySSOState(state, maxAge);

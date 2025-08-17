@@ -36,21 +36,3 @@ export type { AuthDbAdapter, AuthUser } from "./types/db";
 export type { AuthenticatedRequest } from "./middleware/authMiddleware";
 export type { TokenPayload } from "./tokens/verifyToken";
 export { auth, type AuthNamespace, type AuthActionResult } from './auth';
-
-// Transitional deprecated exports (will be removed in a future minor release)
-import { warnDep } from './internal/deprecations';
-import { signupCore } from './core/signup';
-import { signinCore } from './core/signin';
-import { logoutCore } from './core/logout';
-
-function deprecated<T extends (...args: any[]) => any>(fn: T, oldName: string, hint: string): T {
-	return ((...args: any[]) => {
-		warnDep(oldName, hint);
-		return fn(...args);
-	}) as T;
-}
-
-// Re-export with deprecation wrappers
-export const signupCoreDeprecated = deprecated(signupCore, 'signupCore (root export)', 'auth.core.signup via authrix/advanced');
-export const signinCoreDeprecated = deprecated(signinCore, 'signinCore (root export)', 'auth.core.signin via authrix/advanced');
-export const logoutCoreDeprecated = deprecated(logoutCore, 'logoutCore (root export)', 'auth.core.logout via authrix/advanced');

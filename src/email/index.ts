@@ -1,5 +1,4 @@
-// Re-export everything from providers for convenience
-export * from "./providers";
+// Do not re-export deprecated helpers from providers
 
 // Re-export individual services
 export { GmailEmailService, gmailEmailService, createGmailEmailService } from "./gmail";
@@ -8,13 +7,8 @@ export { SendGridEmailService, sendGridEmailService, createSendGridEmailService 
 export { ConsoleEmailService, consoleEmailService, createConsoleEmailService } from "./console";
 export { SMTPEmailService, smtpEmailService, createSMTPEmailService } from "./customSMTP";
 
-// Re-export main functions
-export { 
-  initializeEmailServices, 
-  getAvailableEmailServices, 
-  getEmailServiceInstructions,
-  EmailServiceRegistry
-} from "./providers";
+// Re-export unified registry only
+export { EmailServiceRegistry } from "../core/emailRegistry";
 
 // Re-export types
 export type { EmailService } from "../core/twoFactor";

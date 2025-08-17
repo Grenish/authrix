@@ -4,7 +4,7 @@ import {
   verifyTwoFactorCode,
   cleanupExpiredCodes
 } from "../core/twoFactor";
-import { EmailServiceRegistry, getAvailableEmailServices, getEmailServiceInstructions } from "../email/providers";
+import { EmailServiceRegistry } from "../core/emailRegistry";
 import { authConfig } from "../config";
 import { getCurrentUserFromToken } from "../core/session";
 import { BadRequestError, UnauthorizedError, ForbiddenError, InternalServerError } from "../utils/errors";
@@ -208,25 +208,20 @@ export async function verifyCodeHandler(req: Request, res: Response) {
  */
 export async function getEmailServicesHandler(req: Request, res: Response) {
   try {
-    // Get available email services and their configuration status
-    const emailServicesInfo = getAvailableEmailServices();
-    const instructions = getEmailServiceInstructions();
-
-    // Get currently registered services
-    const registeredServices = EmailServiceRegistry.list();
-    const defaultService = EmailServiceRegistry.getDefault();
+  // Get currently registered services from unified registry
+  const status = EmailServiceRegistry.status();
+  const registeredServices = status.registered;
+  const defaultService = EmailServiceRegistry.getDefault();
 
     res.json({
       success: true,
       data: {
         email: {
-          available: emailServicesInfo.available,
-          configured: emailServicesInfo.configured,
           registered: registeredServices,
           default: defaultService ? 'configured' : 'not configured',
-          defaultServiceName: defaultService ? 'default' : null
+          defaultServiceName: defaultService ? 'default' : null,
+          capabilities: status.capabilities
         },
-        instructions,
         environment: {
           nodeEnv: process.env.NODE_ENV,
           defaultEmailService: process.env.DEFAULT_EMAIL_SERVICE || 'none',

@@ -1,8 +1,4 @@
-/**
- * Tree-shake friendly core barrel entrypoint.
- * Public import path: authrix/core
- * Contains only minimal auth primitives (no SSO/OAuth/providers) for smallest bundles.
- */
+// Tree-shake friendly core barrel entrypoint (authrix/core)
 import { signupCore } from './core/signup';
 import { signinCore } from './core/signin';
 import { logoutCore } from './core/logout';
@@ -30,4 +26,4 @@ export {
 export type { AuthDbAdapter, AuthUser } from './types/db';
 export type { TokenPayload } from './tokens/verifyToken';
 
-// Pure module, no side effects – optimal for tree-shaking.
+// Pure module; no side effects.

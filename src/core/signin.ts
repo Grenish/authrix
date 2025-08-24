@@ -11,8 +11,8 @@ export interface SigninOptions {
   updateLastLogin?: boolean;
   includeUserProfile?: boolean;
   maxLoginAttempts?: number;
-  lockoutDuration?: number; // in minutes
-  requesterIp?: string; // P2: IP dimension for rate limiting
+  lockoutDuration?: number;
+  requesterIp?: string;
 }
 
 export interface SigninResult {
@@ -185,7 +185,17 @@ export async function signinCore(
     }
 
     if (!isValidPassword) {
-      logger.structuredWarn({ category: 'auth', action: 'signin', outcome: 'invalid-credentials', message: 'Invalid email or password', email: normalizedEmail, attemptsRemaining: rateLimitCheck.attemptsRemaining });
+      // Record non-sensitive info to aid debugging (do not log hashes or plaintext passwords)
+      const hashAlgo = user?.password?.startsWith?.('$argon2') ? 'argon2' : user?.password?.startsWith?.('$2') ? 'bcrypt' : 'unknown';
+      logger.structuredWarn({
+        category: 'auth',
+        action: 'signin',
+        outcome: 'invalid-credentials',
+        message: 'Invalid email or password',
+        email: normalizedEmail,
+        hashAlgorithm: hashAlgo,
+        attemptsRemaining: rateLimitCheck.attemptsRemaining
+      });
       throw new UnauthorizedError("Invalid email or password");
     }
 
@@ -199,8 +209,8 @@ export async function signinCore(
       throw new ForbiddenError("Account has been disabled. Please contact support.");
     }
 
-    // Clear login attempts on successful authentication
-    clearLoginAttempts(normalizedEmail);
+  // Clear login attempts on successful authentication (use the same identifier used for checks)
+  clearLoginAttempts(rateLimitId);
 
     // Check if password needs to be changed
     const mustChangePassword = user.mustChangePassword || false;

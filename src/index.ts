@@ -1,15 +1,4 @@
-// === AUTHRIX CORE - MINIMAL BUNDLE ===
-// Essential authentication functions only
-// For framework-specific features, import from dedicated modules:
-//   Universal: import { signupUniversal } from 'authrix/universal'
-//   Next.js: import { signupNextApp } from 'authrix/nextjs'
-//   React: import { signupReact } from 'authrix/react'
-//   OAuth: import { getGoogleOAuthURL } from 'authrix/oauth'
-//   Adapters: import { mongoAdapter } from 'authrix/adapters/mongo'
-//   Utils: import { AuthrixError } from 'authrix/utils'
-
-// Legacy flat action/session exports removed – use auth namespace instead.
-// Advanced / two-factor utilities intentionally withheld pending new advanced entrypoint.
+// Minimal public surface; see subpath exports for frameworks and utilities.
 
 // --- Configuration ---
 export { initAuth, authConfig, isAuthrixInitialized, getAuthrixStatus } from "./config/index";

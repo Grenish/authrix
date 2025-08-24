@@ -1,7 +1,3 @@
-// Note: Framework-specific imports are optional and loaded dynamically to avoid dependencies
-// import { NextRequest, NextResponse } from "next/server"; // Optional Next.js
-// import { Request, Response } from "express"; // Optional Express
-
 import {
   handleGoogleSSO,
   handleGitHubSSO,
@@ -20,8 +16,6 @@ import {
   ForgotPasswordOptions,
   ResetPasswordOptions
 } from "../core/forgotPassword";
-
-// Import only OAuth URL builders (callbacks handled via core SSO wrappers)
 import { getGoogleOAuthURL } from "../providers/google";
 import { getGitHubOAuthURL } from "../providers/github";
 import { getAppleOAuthURL } from "../providers/apple";
@@ -30,12 +24,11 @@ import { getFacebookOAuthURL } from "../providers/facebook";
 import { getLinkedInOAuthURL } from "../providers/linkedin";
 import { getXOAuthURL } from "../providers/x";
 
-// Type definitions for Next.js (optional dependency)
+// Optional Next.js type shims (when Next.js isn't installed)
 interface NextRequest {
   url: string;
   json(): Promise<any>;
 }
-
 interface NextResponse {
   json(body: any, init?: { status?: number }): NextResponse;
   redirect(url: string): NextResponse;
@@ -44,43 +37,38 @@ interface NextResponse {
   };
 }
 
-// Helper function to create NextResponse-like object
+// Dynamically use NextResponse if available; otherwise provide a minimal fallback
 const createNextResponse = () => {
   let NextResponseClass: any;
-
   try {
-    // Try to import NextResponse dynamically
     const nextServer = require('next/server');
     NextResponseClass = nextServer.NextResponse;
   } catch {
-    // Fallback implementation if Next.js is not available
     NextResponseClass = {
       json: (body: any, init?: { status?: number }) => ({
         json: NextResponseClass.json,
         redirect: NextResponseClass.redirect,
-        cookies: { set: () => { } },
+        cookies: { set: () => {} },
         body,
         status: init?.status || 200
       }),
       redirect: (url: string) => ({
         json: NextResponseClass.json,
         redirect: NextResponseClass.redirect,
-        cookies: { set: () => { } },
+        cookies: { set: () => {} },
         redirectUrl: url
       })
     };
   }
-
   return NextResponseClass;
 };
 
-// Type definitions for Express (optional dependency)
+// Optional Express type shims
 interface Request {
   url: string;
   query: any;
   body: any;
 }
-
 interface Response {
   json(body: any): void;
   status(code: number): Response;
@@ -88,7 +76,7 @@ interface Response {
   cookie(name: string, value: string, options?: any): void;
 }
 
-// Generic OAuth user type (common structure across all providers)
+// Common OAuth user shape
 interface GenericOAuthUser {
   id: string;
   email?: string;
@@ -106,29 +94,21 @@ interface GenericOAuthUser {
   };
 }
 
-// Universal callback result type
 interface UniversalCallbackResult {
   user: GenericOAuthUser;
   tokens: any;
   redirectUrl: string;
 }
 
-/**
- * Next.js App Router SSO handlers
- */
+// Next.js App Router SSO handlers
 export const nextSSO = {
-  /**
-   * Handle Google OAuth initiation
-   */
   async initiateGoogle(request: NextRequest): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
       const url = new URL(request.url);
       const redirectUrl = url.searchParams.get('redirect') || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getGoogleOAuthURL({ state });
-
       return NextResponse.redirect(authUrl);
     } catch (error) {
       const NextResponse = createNextResponse();
@@ -139,9 +119,6 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle Google OAuth callback
-   */
   async callbackGoogle(request: NextRequest, options: SSOOptions = {}): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
@@ -149,23 +126,14 @@ export const nextSSO = {
       const code = url.searchParams.get('code');
       const state = url.searchParams.get('state');
 
-      if (!code) {
-        return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
-      }
+      if (!code) return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
+      if (!state) return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
 
-      if (!state) {
-        return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
-      }
-
-      // Verify state
       const stateData = verifySSOState(state);
-
-  // Use core SSO handler (creates/updates user + JWT)
-  const ssoResult = await handleGoogleSSO(code, options);
-
-  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  return response;
+      const ssoResult = await handleGoogleSSO(code, options);
+      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+      response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -174,18 +142,13 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle GitHub OAuth initiation
-   */
   async initiateGitHub(request: NextRequest): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
       const url = new URL(request.url);
       const redirectUrl = url.searchParams.get('redirect') || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getGitHubOAuthURL({ state });
-
       return NextResponse.redirect(authUrl);
     } catch (error) {
       const NextResponse = createNextResponse();
@@ -196,9 +159,6 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle GitHub OAuth callback
-   */
   async callbackGitHub(request: NextRequest, options: SSOOptions = {}): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
@@ -206,21 +166,14 @@ export const nextSSO = {
       const code = url.searchParams.get('code');
       const state = url.searchParams.get('state');
 
-      if (!code) {
-        return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
-      }
+      if (!code) return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
+      if (!state) return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
 
-      if (!state) {
-        return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
-      }
-
-      // Verify state
       const stateData = verifySSOState(state);
-
-  const ssoResult = await handleGitHubSSO(code, options);
-  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  return response;
+      const ssoResult = await handleGitHubSSO(code, options);
+      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+      response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -229,18 +182,13 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle Apple OAuth initiation
-   */
   async initiateApple(request: NextRequest): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
       const url = new URL(request.url);
       const redirectUrl = url.searchParams.get('redirect') || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getAppleOAuthURL({ state });
-
       return NextResponse.redirect(authUrl);
     } catch (error) {
       const NextResponse = createNextResponse();
@@ -251,33 +199,21 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle Apple OAuth callback
-   */
   async callbackApple(request: NextRequest, options: SSOOptions = {}): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
       const url = new URL(request.url);
       const code = url.searchParams.get('code');
       const state = url.searchParams.get('state');
-      const idToken = url.searchParams.get('id_token');
-      const user = url.searchParams.get('user');
 
-      if (!code) {
-        return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
-      }
+      if (!code) return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
+      if (!state) return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
 
-      if (!state) {
-        return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
-      }
-
-      // Verify state
       const stateData = verifySSOState(state);
-
-  const ssoResult = await handleAppleSSO(code, options);
-  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  return response;
+      const ssoResult = await handleAppleSSO(code, options);
+      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+      response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -286,18 +222,13 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle Discord OAuth initiation
-   */
   async initiateDiscord(request: NextRequest): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
       const url = new URL(request.url);
       const redirectUrl = url.searchParams.get('redirect') || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getDiscordOAuthURL({ state });
-
       return NextResponse.redirect(authUrl);
     } catch (error) {
       const NextResponse = createNextResponse();
@@ -308,9 +239,6 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle Discord OAuth callback
-   */
   async callbackDiscord(request: NextRequest, options: SSOOptions = {}): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
@@ -318,21 +246,14 @@ export const nextSSO = {
       const code = url.searchParams.get('code');
       const state = url.searchParams.get('state');
 
-      if (!code) {
-        return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
-      }
+      if (!code) return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
+      if (!state) return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
 
-      if (!state) {
-        return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
-      }
-
-      // Verify state
       const stateData = verifySSOState(state);
-
-  const ssoResult = await handleDiscordSSO(code, options);
-  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  return response;
+      const ssoResult = await handleDiscordSSO(code, options);
+      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+      response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -341,18 +262,13 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle Facebook OAuth initiation
-   */
   async initiateFacebook(request: NextRequest): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
       const url = new URL(request.url);
       const redirectUrl = url.searchParams.get('redirect') || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getFacebookOAuthURL({ state });
-
       return NextResponse.redirect(authUrl);
     } catch (error) {
       const NextResponse = createNextResponse();
@@ -363,9 +279,6 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle Facebook OAuth callback
-   */
   async callbackFacebook(request: NextRequest, options: SSOOptions = {}): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
@@ -373,21 +286,14 @@ export const nextSSO = {
       const code = url.searchParams.get('code');
       const state = url.searchParams.get('state');
 
-      if (!code) {
-        return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
-      }
+      if (!code) return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
+      if (!state) return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
 
-      if (!state) {
-        return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
-      }
-
-      // Verify state
       const stateData = verifySSOState(state);
-
-  const ssoResult = await handleFacebookSSO(code, options);
-  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  return response;
+      const ssoResult = await handleFacebookSSO(code, options);
+      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+      response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -396,18 +302,13 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle LinkedIn OAuth initiation
-   */
   async initiateLinkedIn(request: NextRequest): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
       const url = new URL(request.url);
       const redirectUrl = url.searchParams.get('redirect') || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getLinkedInOAuthURL({ state });
-
       return NextResponse.redirect(authUrl);
     } catch (error) {
       const NextResponse = createNextResponse();
@@ -418,9 +319,6 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle LinkedIn OAuth callback
-   */
   async callbackLinkedIn(request: NextRequest, options: SSOOptions = {}): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
@@ -428,21 +326,14 @@ export const nextSSO = {
       const code = url.searchParams.get('code');
       const state = url.searchParams.get('state');
 
-      if (!code) {
-        return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
-      }
+      if (!code) return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
+      if (!state) return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
 
-      if (!state) {
-        return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
-      }
-
-      // Verify state
       const stateData = verifySSOState(state);
-
-  const ssoResult = await handleLinkedInSSO(code, options);
-  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  return response;
+      const ssoResult = await handleLinkedInSSO(code, options);
+      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+      response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -451,18 +342,13 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle X/Twitter OAuth initiation
-   */
   async initiateX(request: NextRequest): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
       const url = new URL(request.url);
       const redirectUrl = url.searchParams.get('redirect') || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authResult = await getXOAuthURL({ state });
-
       return NextResponse.redirect(authResult.url);
     } catch (error) {
       const NextResponse = createNextResponse();
@@ -473,9 +359,6 @@ export const nextSSO = {
     }
   },
 
-  /**
-   * Handle X/Twitter OAuth callback
-   */
   async callbackX(request: NextRequest, options: SSOOptions = {}): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
@@ -483,21 +366,14 @@ export const nextSSO = {
       const code = url.searchParams.get('code');
       const state = url.searchParams.get('state');
 
-      if (!code) {
-        return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
-      }
+      if (!code) return NextResponse.json({ error: 'Authorization code not provided' }, { status: 400 });
+      if (!state) return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
 
-      if (!state) {
-        return NextResponse.json({ error: 'State parameter not provided' }, { status: 400 });
-      }
-
-      // Verify state
       const stateData = verifySSOState(state);
-
-  const ssoResult = await handleXSSO(code, state, options);
-  const response = NextResponse.redirect(stateData.redirect || '/dashboard');
-  response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  return response;
+      const ssoResult = await handleXSSO(code, state, options);
+      const response = NextResponse.redirect(stateData.redirect || '/dashboard');
+      response.cookies.set('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      return response;
     } catch (error) {
       const NextResponse = createNextResponse();
       const errorUrl = new URL('/auth/error', request.url);
@@ -507,25 +383,17 @@ export const nextSSO = {
   }
 };
 
-/**
- * Next.js App Router forgot password handlers
- */
+// Next.js App Router forgot password handlers
 export const nextForgotPassword = {
-  /**
-   * Initiate forgot password process
-   */
   async initiate(request: NextRequest, options: ForgotPasswordOptions = {}): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
       const body = await request.json();
       const { email } = body;
 
-      if (!email) {
-        return NextResponse.json({ error: 'Email is required' }, { status: 400 });
-      }
+      if (!email) return NextResponse.json({ error: 'Email is required' }, { status: 400 });
 
       const result = await initiateForgotPassword(email, options);
-
       return NextResponse.json(result);
     } catch (error) {
       const NextResponse = createNextResponse();
@@ -536,9 +404,6 @@ export const nextForgotPassword = {
     }
   },
 
-  /**
-   * Reset password with code
-   */
   async reset(request: NextRequest, options: ResetPasswordOptions = {}): Promise<NextResponse> {
     try {
       const NextResponse = createNextResponse();
@@ -546,14 +411,10 @@ export const nextForgotPassword = {
       const { email, code, newPassword } = body;
 
       if (!email || !code || !newPassword) {
-        return NextResponse.json(
-          { error: 'Email, code, and new password are required' },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: 'Email, code, and new password are required' }, { status: 400 });
       }
 
       const result = await resetPasswordWithCode(email, code, newPassword, options);
-
       return NextResponse.json(result);
     } catch (error) {
       const NextResponse = createNextResponse();
@@ -565,20 +426,13 @@ export const nextForgotPassword = {
   }
 };
 
-/**
- * Express.js SSO handlers
- */
+// Express.js SSO handlers
 export const expressSSO = {
-  /**
-   * Handle Google OAuth initiation
-   */
   initiateGoogle(req: Request, res: Response): void {
     try {
       const redirectUrl = (req.query.redirect as string) || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getGoogleOAuthURL({ state });
-
       res.redirect(authUrl);
     } catch (error) {
       res.status(500).json({
@@ -587,44 +441,26 @@ export const expressSSO = {
     }
   },
 
-  /**
-   * Handle Google OAuth callback
-   */
   async callbackGoogle(req: Request, res: Response, options: SSOOptions = {}): Promise<void> {
     try {
       const { code, state } = req.query;
+      if (!code) return void res.status(400).json({ error: 'Authorization code not provided' });
+      if (!state) return void res.status(400).json({ error: 'State parameter not provided' });
 
-      if (!code) {
-        res.status(400).json({ error: 'Authorization code not provided' });
-        return;
-      }
-
-      if (!state) {
-        res.status(400).json({ error: 'State parameter not provided' });
-        return;
-      }
-
-      // Verify state
       const stateData = verifySSOState(state as string);
-
-  const ssoResult = await handleGoogleSSO(code as string, options);
-  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  res.redirect(stateData.redirect || '/dashboard');
+      const ssoResult = await handleGoogleSSO(code as string, options);
+      res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
   },
 
-  /**
-   * Handle GitHub OAuth initiation
-   */
   initiateGitHub(req: Request, res: Response): void {
     try {
       const redirectUrl = (req.query.redirect as string) || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getGitHubOAuthURL({ state });
-
       res.redirect(authUrl);
     } catch (error) {
       res.status(500).json({
@@ -633,44 +469,26 @@ export const expressSSO = {
     }
   },
 
-  /**
-   * Handle GitHub OAuth callback
-   */
   async callbackGitHub(req: Request, res: Response, options: SSOOptions = {}): Promise<void> {
     try {
       const { code, state } = req.query;
+      if (!code) return void res.status(400).json({ error: 'Authorization code not provided' });
+      if (!state) return void res.status(400).json({ error: 'State parameter not provided' });
 
-      if (!code) {
-        res.status(400).json({ error: 'Authorization code not provided' });
-        return;
-      }
-
-      if (!state) {
-        res.status(400).json({ error: 'State parameter not provided' });
-        return;
-      }
-
-      // Verify state
       const stateData = verifySSOState(state as string);
-
-  const ssoResult = await handleGitHubSSO(code as string, options);
-  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  res.redirect(stateData.redirect || '/dashboard');
+      const ssoResult = await handleGitHubSSO(code as string, options);
+      res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
   },
 
-  /**
-   * Handle Apple OAuth initiation
-   */
   initiateApple(req: Request, res: Response): void {
     try {
       const redirectUrl = (req.query.redirect as string) || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getAppleOAuthURL({ state });
-
       res.redirect(authUrl);
     } catch (error) {
       res.status(500).json({
@@ -679,44 +497,26 @@ export const expressSSO = {
     }
   },
 
-  /**
-   * Handle Apple OAuth callback
-   */
   async callbackApple(req: Request, res: Response, options: SSOOptions = {}): Promise<void> {
     try {
-      const { code, state, id_token, user } = req.body || req.query;
+      const { code, state } = req.body || req.query;
+      if (!code) return void res.status(400).json({ error: 'Authorization code not provided' });
+      if (!state) return void res.status(400).json({ error: 'State parameter not provided' });
 
-      if (!code) {
-        res.status(400).json({ error: 'Authorization code not provided' });
-        return;
-      }
-
-      if (!state) {
-        res.status(400).json({ error: 'State parameter not provided' });
-        return;
-      }
-
-      // Verify state
       const stateData = verifySSOState(state as string);
-
-  const ssoResult = await handleAppleSSO(code as string, options);
-  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  res.redirect(stateData.redirect || '/dashboard');
+      const ssoResult = await handleAppleSSO(code as string, options);
+      res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
   },
 
-  /**
-   * Handle Discord OAuth initiation
-   */
   initiateDiscord(req: Request, res: Response): void {
     try {
       const redirectUrl = (req.query.redirect as string) || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getDiscordOAuthURL({ state });
-
       res.redirect(authUrl);
     } catch (error) {
       res.status(500).json({
@@ -725,44 +525,26 @@ export const expressSSO = {
     }
   },
 
-  /**
-   * Handle Discord OAuth callback
-   */
   async callbackDiscord(req: Request, res: Response, options: SSOOptions = {}): Promise<void> {
     try {
       const { code, state } = req.query;
+      if (!code) return void res.status(400).json({ error: 'Authorization code not provided' });
+      if (!state) return void res.status(400).json({ error: 'State parameter not provided' });
 
-      if (!code) {
-        res.status(400).json({ error: 'Authorization code not provided' });
-        return;
-      }
-
-      if (!state) {
-        res.status(400).json({ error: 'State parameter not provided' });
-        return;
-      }
-
-      // Verify state
       const stateData = verifySSOState(state as string);
-
-  const ssoResult = await handleDiscordSSO(code as string, options);
-  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  res.redirect(stateData.redirect || '/dashboard');
+      const ssoResult = await handleDiscordSSO(code as string, options);
+      res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
   },
 
-  /**
-   * Handle Facebook OAuth initiation
-   */
   initiateFacebook(req: Request, res: Response): void {
     try {
       const redirectUrl = (req.query.redirect as string) || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getFacebookOAuthURL({ state });
-
       res.redirect(authUrl);
     } catch (error) {
       res.status(500).json({
@@ -771,44 +553,26 @@ export const expressSSO = {
     }
   },
 
-  /**
-   * Handle Facebook OAuth callback
-   */
   async callbackFacebook(req: Request, res: Response, options: SSOOptions = {}): Promise<void> {
     try {
       const { code, state } = req.query;
+      if (!code) return void res.status(400).json({ error: 'Authorization code not provided' });
+      if (!state) return void res.status(400).json({ error: 'State parameter not provided' });
 
-      if (!code) {
-        res.status(400).json({ error: 'Authorization code not provided' });
-        return;
-      }
-
-      if (!state) {
-        res.status(400).json({ error: 'State parameter not provided' });
-        return;
-      }
-
-      // Verify state
       const stateData = verifySSOState(state as string);
-
-  const ssoResult = await handleFacebookSSO(code as string, options);
-  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  res.redirect(stateData.redirect || '/dashboard');
+      const ssoResult = await handleFacebookSSO(code as string, options);
+      res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
   },
 
-  /**
-   * Handle LinkedIn OAuth initiation
-   */
   initiateLinkedIn(req: Request, res: Response): void {
     try {
       const redirectUrl = (req.query.redirect as string) || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authUrl = getLinkedInOAuthURL({ state });
-
       res.redirect(authUrl);
     } catch (error) {
       res.status(500).json({
@@ -817,44 +581,26 @@ export const expressSSO = {
     }
   },
 
-  /**
-   * Handle LinkedIn OAuth callback
-   */
   async callbackLinkedIn(req: Request, res: Response, options: SSOOptions = {}): Promise<void> {
     try {
       const { code, state } = req.query;
+      if (!code) return void res.status(400).json({ error: 'Authorization code not provided' });
+      if (!state) return void res.status(400).json({ error: 'State parameter not provided' });
 
-      if (!code) {
-        res.status(400).json({ error: 'Authorization code not provided' });
-        return;
-      }
-
-      if (!state) {
-        res.status(400).json({ error: 'State parameter not provided' });
-        return;
-      }
-
-      // Verify state
       const stateData = verifySSOState(state as string);
-
-  const ssoResult = await handleLinkedInSSO(code as string, options);
-  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  res.redirect(stateData.redirect || '/dashboard');
+      const ssoResult = await handleLinkedInSSO(code as string, options);
+      res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
   },
 
-  /**
-   * Handle X/Twitter OAuth initiation
-   */
   async initiateX(req: Request, res: Response): Promise<void> {
     try {
       const redirectUrl = (req.query.redirect as string) || '/dashboard';
-
       const state = generateSSOState({ redirect: redirectUrl });
       const authResult = await getXOAuthURL({ state });
-
       res.redirect(authResult.url);
     } catch (error) {
       res.status(500).json({
@@ -863,50 +609,28 @@ export const expressSSO = {
     }
   },
 
-  /**
-   * Handle X/Twitter OAuth callback
-   */
   async callbackX(req: Request, res: Response, options: SSOOptions = {}): Promise<void> {
     try {
       const { code, state } = req.query;
+      if (!code) return void res.status(400).json({ error: 'Authorization code not provided' });
+      if (!state) return void res.status(400).json({ error: 'State parameter not provided' });
 
-      if (!code) {
-        res.status(400).json({ error: 'Authorization code not provided' });
-        return;
-      }
-
-      if (!state) {
-        res.status(400).json({ error: 'State parameter not provided' });
-        return;
-      }
-
-      // Verify state
       const stateData = verifySSOState(state as string);
-
-  const ssoResult = await handleXSSO(code as string, state as string, options);
-  res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
-  res.redirect(stateData.redirect || '/dashboard');
+      const ssoResult = await handleXSSO(code as string, state as string, options);
+      res.cookie('auth_token', ssoResult.token, { ...ssoResult.cookieOptions });
+      res.redirect(stateData.redirect || '/dashboard');
     } catch (error) {
       res.redirect(`/auth/error?message=${encodeURIComponent(error instanceof Error ? error.message : 'Authentication failed')}`);
     }
   }
 };
 
-/**
- * Express.js forgot password handlers
- */
+// Express.js forgot password handlers
 export const expressForgotPassword = {
-  /**
-   * Initiate forgot password process
-   */
   async initiate(req: Request, res: Response, options: ForgotPasswordOptions = {}): Promise<void> {
     try {
       const { email } = req.body;
-
-      if (!email) {
-        res.status(400).json({ error: 'Email is required' });
-        return;
-      }
+      if (!email) return void res.status(400).json({ error: 'Email is required' });
 
       const result = await initiateForgotPassword(email, options);
       res.json(result);
@@ -917,18 +641,11 @@ export const expressForgotPassword = {
     }
   },
 
-  /**
-   * Reset password with code
-   */
   async reset(req: Request, res: Response, options: ResetPasswordOptions = {}): Promise<void> {
     try {
       const { email, code, newPassword } = req.body;
-
       if (!email || !code || !newPassword) {
-        res.status(400).json({
-          error: 'Email, code, and new password are required'
-        });
-        return;
+        return void res.status(400).json({ error: 'Email, code, and new password are required' });
       }
 
       const result = await resetPasswordWithCode(email, code, newPassword, options);
@@ -941,124 +658,89 @@ export const expressForgotPassword = {
   }
 };
 
-/**
- * Universal helpers for any framework
- */
+// Universal SSO helpers
 export const universalSSO = {
-  /**
-   * Get Google OAuth URL
-   */
   getGoogleAuthUrl(redirectUrl: string = '/dashboard'): string {
     const state = generateSSOState({ redirect: redirectUrl });
     return getGoogleOAuthURL({ state });
   },
 
-  /**
-   * Get GitHub OAuth URL
-   */
   getGitHubAuthUrl(redirectUrl: string = '/dashboard'): string {
     const state = generateSSOState({ redirect: redirectUrl });
     return getGitHubOAuthURL({ state });
   },
 
-  /**
-   * Get Apple OAuth URL
-   */
   getAppleAuthUrl(redirectUrl: string = '/dashboard'): string {
     const state = generateSSOState({ redirect: redirectUrl });
     return getAppleOAuthURL({ state });
   },
 
-  /**
-   * Get Discord OAuth URL
-   */
   getDiscordAuthUrl(redirectUrl: string = '/dashboard'): string {
     const state = generateSSOState({ redirect: redirectUrl });
     return getDiscordOAuthURL({ state });
   },
 
-  /**
-   * Get Facebook OAuth URL
-   */
   getFacebookAuthUrl(redirectUrl: string = '/dashboard'): string {
     const state = generateSSOState({ redirect: redirectUrl });
     return getFacebookOAuthURL({ state });
   },
 
-  /**
-   * Get LinkedIn OAuth URL
-   */
   getLinkedInAuthUrl(redirectUrl: string = '/dashboard'): string {
     const state = generateSSOState({ redirect: redirectUrl });
     return getLinkedInOAuthURL({ state });
   },
 
-  /**
-   * Get X/Twitter OAuth URL
-   */
   async getXAuthUrl(redirectUrl: string = '/dashboard'): Promise<string> {
     const state = generateSSOState({ redirect: redirectUrl });
     const authResult = await getXOAuthURL({ state });
     return authResult.url;
   },
 
-  /**
-   * Handle OAuth callback for any provider
-   */
   async handleCallback(
     provider: 'google' | 'github' | 'apple' | 'discord' | 'facebook' | 'linkedin' | 'x',
     code: string,
     state: string,
     options: any = {}
   ): Promise<UniversalCallbackResult> {
-    // Verify state
     const stateData = verifySSOState(state);
 
-    // Handle SSO based on provider
     let result: GenericOAuthUser;
     switch (provider) {
-      case 'google':
-        {
-          const { handleGoogleCallback } = await import('../providers/google');
-          result = await handleGoogleCallback(code, { includeTokens: true, ...options });
-        }
+      case 'google': {
+        const { handleGoogleCallback } = await import('../providers/google');
+        result = await handleGoogleCallback(code, { includeTokens: true, ...options });
         break;
-      case 'github':
-        {
-          const { handleGitHubCallback } = await import('../providers/github');
-          result = await handleGitHubCallback(code, { includeToken: true, ...options });
-        }
+      }
+      case 'github': {
+        const { handleGitHubCallback } = await import('../providers/github');
+        result = await handleGitHubCallback(code, { includeToken: true, ...options });
         break;
-      case 'apple':
-        {
-          const { handleAppleCallback } = await import('../providers/apple');
-          result = await handleAppleCallback(code, { state, ...options });
-        }
+      }
+      case 'apple': {
+        const { handleAppleCallback } = await import('../providers/apple');
+        result = await handleAppleCallback(code, { state, ...options });
         break;
-      case 'discord':
-        {
-          const { handleDiscordCallback } = await import('../providers/discord');
-          result = await handleDiscordCallback(code, { state, includeTokens: true, ...options });
-        }
+      }
+      case 'discord': {
+        const { handleDiscordCallback } = await import('../providers/discord');
+        result = await handleDiscordCallback(code, { state, includeTokens: true, ...options });
         break;
-      case 'facebook':
-        {
-          const { handleFacebookCallback } = await import('../providers/facebook');
-          result = await handleFacebookCallback(code, { state, includeTokens: true, ...options });
-        }
+      }
+      case 'facebook': {
+        const { handleFacebookCallback } = await import('../providers/facebook');
+        result = await handleFacebookCallback(code, { state, includeTokens: true, ...options });
         break;
-      case 'linkedin':
-        {
-          const { handleLinkedInCallback } = await import('../providers/linkedin');
-          result = await handleLinkedInCallback(code, { state, includeTokens: true, ...options });
-        }
+      }
+      case 'linkedin': {
+        const { handleLinkedInCallback } = await import('../providers/linkedin');
+        result = await handleLinkedInCallback(code, { state, includeTokens: true, ...options });
         break;
-      case 'x':
-        {
-          const { handleXCallback } = await import('../providers/x');
-          result = await handleXCallback(code, state, { includeToken: true, ...options });
-        }
+      }
+      case 'x': {
+        const { handleXCallback } = await import('../providers/x');
+        result = await handleXCallback(code, state, { includeToken: true, ...options });
         break;
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -1070,9 +752,6 @@ export const universalSSO = {
     };
   },
 
-  /**
-   * Get all available OAuth URLs
-   */
   async getAllAuthUrls(redirectUrl: string = '/dashboard'): Promise<Record<string, string>> {
     return {
       google: this.getGoogleAuthUrl(redirectUrl),
@@ -1085,28 +764,16 @@ export const universalSSO = {
     };
   },
 
-  /**
-   * Get supported providers list
-   */
   getSupportedProviders(): string[] {
     return ['google', 'github', 'apple', 'discord', 'facebook', 'linkedin', 'x'];
   }
 };
 
-/**
- * Universal forgot password helpers
- */
+// Universal forgot password helpers
 export const universalForgotPassword = {
-  /**
-   * Initiate password reset
-   */
   async initiate(email: string, options: ForgotPasswordOptions = {}) {
     return await initiateForgotPassword(email, options);
   },
-
-  /**
-   * Reset password
-   */
   async reset(email: string, code: string, newPassword: string, options: ResetPasswordOptions = {}) {
     return await resetPasswordWithCode(email, code, newPassword, options);
   }

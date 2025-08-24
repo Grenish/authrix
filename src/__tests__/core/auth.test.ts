@@ -12,7 +12,7 @@ jest.mock('../../config', () => {
   const mockAuthConfig = {
     getInstance: jest.fn().mockReturnValue({
       db: mockAdapter,
-      jwtSecret: 'test-secret',
+      jwtSecret: 'test-jwt-secret-123',
       cookieName: 'auth_token',
       tokenExpiry: '24h'
     })

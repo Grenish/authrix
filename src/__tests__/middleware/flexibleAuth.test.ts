@@ -12,7 +12,8 @@ jest.mock('../../frameworks/universal', () => ({
 
 jest.mock('../../config', () => ({
   authConfig: {
-    cookieName: 'auth-token'
+    cookieName: 'auth-token',
+    jwtSecret: 'test-jwt-secret-123'
   }
 }));
 

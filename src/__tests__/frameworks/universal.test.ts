@@ -12,6 +12,7 @@ import {
 jest.mock('../../config', () => ({
   authConfig: {
     cookieName: 'auth-token',
+    jwtSecret: 'test-jwt-secret-123',
     db: {
       findUserByEmail: jest.fn(),
       createUser: jest.fn(),

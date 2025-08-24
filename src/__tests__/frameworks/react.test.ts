@@ -17,7 +17,8 @@ import {
 // Mock authConfig
 jest.mock('../../config', () => ({
   authConfig: {
-    cookieName: 'auth-token'
+    cookieName: 'auth-token',
+    jwtSecret: 'test-jwt-secret-123'
   }
 }));
 

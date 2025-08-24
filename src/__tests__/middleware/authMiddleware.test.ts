@@ -7,7 +7,8 @@ jest.mock('../../config', () => ({
     cookieName: 'auth-token',
     db: {
       findUserById: jest.fn()
-    }
+    },
+    jwtSecret: 'test-jwt-secret-123'
   }
 }));
 

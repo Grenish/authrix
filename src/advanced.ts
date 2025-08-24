@@ -1,7 +1,4 @@
-/**
- * Advanced entrypoint exposing low-level core primitives.
- * Recommended to migrate imports here instead of using deprecated root *Core exports.
- */
+// Advanced entrypoint exposing low-level core primitives.
 import { signupCore } from './core/signup';
 import { signinCore } from './core/signin';
 import { logoutCore } from './core/logout';

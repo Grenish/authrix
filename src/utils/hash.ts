@@ -213,6 +213,15 @@ class SecurityConfig {
         console.info('[Authrix] Switched to derived dev pepper from jwtSecret.');
       }
     }
+    // If an explicit pepper has been configured after initial construction (e.g. initAuth ran later)
+    // and differs from current pepper, upgrade while preserving previous for fallback verification.
+    if (authConfig?.authPepper && this.PEPPER !== authConfig.authPepper) {
+      // Only perform upgrade once per change to avoid unbounded PREV_PEPPER churn.
+      if (this.PREV_PEPPER !== this.PEPPER) {
+        this.PREV_PEPPER = this.PEPPER;
+      }
+      this.PEPPER = authConfig.authPepper;
+    }
     return this.PEPPER;
   }
 
@@ -227,7 +236,7 @@ class SecurityConfig {
 
 const config = new SecurityConfig();
 
-// ============================= Rate Limiting =============================
+// Rate Limiting
 
 class RateLimiter {
   private store = new Map<string, RateLimitEntry>();

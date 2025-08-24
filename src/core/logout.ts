@@ -1,93 +1,119 @@
 import { authConfig } from "../config";
 
+// Types
 export interface LogoutOptions {
   invalidateAllSessions?: boolean;
   clearRememberMe?: boolean;
   redirectUrl?: string;
-  extraClear?: string[]; // P2: user-specified additional cookies only
+  extraClear?: string[];
 }
 
 export interface LogoutResult {
   success: boolean;
   message: string;
-  cookiesToClear: Array<{
-    name: string;
-    options: {
-      httpOnly: boolean;
-      secure: boolean;
-      sameSite: "lax" | "strict" | "none";
-      path: string;
-      expires: Date;
-      domain?: string;
-    };
-  }>;
+  cookiesToClear: CookieConfig[];
   redirectUrl?: string;
+}
+
+interface CookieConfig {
+  name: string;
+  options: CookieOptions;
+}
+
+interface CookieOptions {
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: "lax" | "strict" | "none";
+  path: string;
+  expires: Date;
+  domain?: string;
+}
+
+// Constants
+const DEFAULT_COOKIE_OPTIONS: Omit<CookieOptions, 'expires'> = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax",
+  path: "/"
+} as const;
+
+const EXPIRED_DATE = new Date(0);
+
+const MESSAGES = {
+  LOGOUT_SUCCESS: "Logged out successfully",
+  LOGOUT_ALL_SUCCESS: "Logged out from all devices",
+  DB_NOT_CONFIGURED: "Database not configured for session management",
+  SESSION_INVALIDATION_PENDING: "[AUTHRIX] Session invalidation requested but not yet implemented",
+  LOGOUT_ALL_PENDING: (userId: string) => `[AUTHRIX] Logout all devices requested for user ${userId} - not yet implemented`
+} as const;
+
+// Helper functions
+const createCookieConfig = (name: string, options: Partial<CookieOptions> = {}): CookieConfig => ({
+  name,
+  options: {
+    ...DEFAULT_COOKIE_OPTIONS,
+    expires: EXPIRED_DATE,
+    ...options
+  }
+});
+
+const isValidCookieName = (name: unknown): name is string => 
+  typeof name === 'string' && name.trim().length > 0;
+
+// Cache for cookie configurations
+const cookieConfigCache = new Map<string, CookieConfig>();
+
+function getCachedCookieConfig(name: string): CookieConfig {
+  if (!cookieConfigCache.has(name)) {
+    cookieConfigCache.set(name, createCookieConfig(name));
+  }
+  return cookieConfigCache.get(name)!;
 }
 
 /**
  * Framework-agnostic logout function with enhanced security features
+ * Made async to match the expected return type
  */
-export function logoutCore(options: LogoutOptions = {}): LogoutResult {
+export async function logoutCore(options: LogoutOptions = {}): Promise<LogoutResult> {
   const {
     invalidateAllSessions = false,
     clearRememberMe = true,
-  redirectUrl,
-  extraClear = []
+    redirectUrl,
+    extraClear = []
   } = options;
 
-  const cookiesToClear = [
-    {
-      name: authConfig.cookieName,
-      options: {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax" as const,
-        path: "/",
-        expires: new Date(0), // Expire immediately
-      }
-    }
+  // Build cookies to clear
+  const cookiesToClear: CookieConfig[] = [
+    getCachedCookieConfig(authConfig.cookieName)
   ];
 
-  // Clear remember me cookie if requested
+  // Add remember me cookie if needed
   if (clearRememberMe) {
-    cookiesToClear.push({
-      name: `${authConfig.cookieName}_remember`,
-      options: {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax" as const,
-        path: "/",
-        expires: new Date(0),
-      }
-    });
+    cookiesToClear.push(
+      getCachedCookieConfig(`${authConfig.cookieName}_remember`)
+    );
   }
 
-  // Only clear explicitly provided extra cookies now (no hardcoded list)
-  extraClear.forEach(cookieName => {
-    if (typeof cookieName === 'string' && cookieName.trim()) {
-      cookiesToClear.push({
-        name: cookieName.trim(),
-        options: {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: "lax" as const,
-          path: "/",
-          expires: new Date(0),
-        }
-      });
-    }
-  });
+  // Add extra cookies efficiently
+  const validExtraCookies = extraClear
+    .filter(isValidCookieName)
+    .map(name => getCachedCookieConfig(name.trim()));
+  
+  cookiesToClear.push(...validExtraCookies);
 
-  // TODO: Implement session invalidation in database
+  // Handle session invalidation
   if (invalidateAllSessions) {
-    // This would require implementing session management in the database
-    // For now, we just log the intention
-    console.log('[AUTHRIX] Session invalidation requested but not yet implemented');
+    // TODO: Implement session invalidation in database
+    if (process.env.NODE_ENV === 'development') {
+      console.log(MESSAGES.SESSION_INVALIDATION_PENDING);
+    }
+    // In the future, this would be an async operation:
+    // await invalidateUserSessions(userId);
   }
 
   return {
     success: true,
-    message: "Logged out successfully",
+    message: MESSAGES.LOGOUT_SUCCESS,
     cookiesToClear,
     redirectUrl
   };
@@ -95,22 +121,35 @@ export function logoutCore(options: LogoutOptions = {}): LogoutResult {
 
 /**
  * Express.js specific logout function for backward compatibility
+ * Made async to be consistent with core function
  */
-export function logout(res: any, options?: LogoutOptions) {
-  const result = logoutCore(options);
+export async function logout(res: any, options?: LogoutOptions): Promise<{
+  success: boolean;
+  message: string;
+  redirectUrl?: string;
+}> {
+  const result = await logoutCore(options);
 
-  // Clear all cookies
-  result.cookiesToClear.forEach(({ name, options: cookieOptions }) => {
-    if (res.clearCookie) {
-      res.clearCookie(name, {
-        httpOnly: cookieOptions.httpOnly,
-        secure: cookieOptions.secure,
-        sameSite: cookieOptions.sameSite,
-        path: cookieOptions.path,
-        ...(cookieOptions.domain && { domain: cookieOptions.domain })
-      });
-    }
-  });
+  // Clear cookies if response object has clearCookie method
+  if (res?.clearCookie) {
+    const cookieOptionsMap = new Map<string, any>();
+    
+    result.cookiesToClear.forEach(({ name, options: cookieOptions }) => {
+      // Cache cookie options for reuse
+      const key = JSON.stringify(cookieOptions);
+      if (!cookieOptionsMap.has(key)) {
+        cookieOptionsMap.set(key, {
+          httpOnly: cookieOptions.httpOnly,
+          secure: cookieOptions.secure,
+          sameSite: cookieOptions.sameSite,
+          path: cookieOptions.path,
+          ...(cookieOptions.domain && { domain: cookieOptions.domain })
+        });
+      }
+      
+      res.clearCookie(name, cookieOptionsMap.get(key));
+    });
+  }
 
   return {
     success: result.success,
@@ -122,15 +161,20 @@ export function logout(res: any, options?: LogoutOptions) {
 /**
  * Logout from all devices (requires session management implementation)
  */
-export async function logoutAllDevices(userId: string): Promise<{
+export async function logoutAllDevices(
+  userId: string
+): Promise<{
   success: boolean;
   message: string;
   sessionsInvalidated: number;
 }> {
-  const db = authConfig.db;
+  if (!userId || typeof userId !== 'string') {
+    throw new TypeError('Invalid userId provided');
+  }
 
+  const db = authConfig.db;
   if (!db) {
-    throw new Error("Database not configured for session management");
+    throw new Error(MESSAGES.DB_NOT_CONFIGURED);
   }
 
   // TODO: Implement when session management is added
@@ -138,12 +182,54 @@ export async function logoutAllDevices(userId: string): Promise<{
   // 1. Invalidating all JWT tokens for the user (requires token blacklisting)
   // 2. Clearing all active sessions from database
   // 3. Updating user's token version/salt to invalidate existing JWTs
+  
+  if (process.env.NODE_ENV === 'development') {
+    console.log(MESSAGES.LOGOUT_ALL_PENDING(userId));
+  }
 
-  console.log(`[AUTHRIX] Logout all devices requested for user ${userId} - not yet implemented`);
+  // Placeholder for future implementation
+  // const sessionsInvalidated = await db.sessions.invalidateAll(userId);
 
   return {
     success: true,
-    message: "Logged out from all devices",
+    message: MESSAGES.LOGOUT_ALL_SUCCESS,
     sessionsInvalidated: 0 // Would be actual count when implemented
+  };
+}
+
+// Export a synchronous version if needed for backward compatibility
+export function logoutCoreSync(options: LogoutOptions = {}): LogoutResult {
+  const {
+    invalidateAllSessions = false,
+    clearRememberMe = true,
+    redirectUrl,
+    extraClear = []
+  } = options;
+
+  const cookiesToClear: CookieConfig[] = [
+    getCachedCookieConfig(authConfig.cookieName)
+  ];
+
+  if (clearRememberMe) {
+    cookiesToClear.push(
+      getCachedCookieConfig(`${authConfig.cookieName}_remember`)
+    );
+  }
+
+  const validExtraCookies = extraClear
+    .filter(isValidCookieName)
+    .map(name => getCachedCookieConfig(name.trim()));
+  
+  cookiesToClear.push(...validExtraCookies);
+
+  if (invalidateAllSessions && process.env.NODE_ENV === 'development') {
+    console.log(MESSAGES.SESSION_INVALIDATION_PENDING);
+  }
+
+  return {
+    success: true,
+    message: MESSAGES.LOGOUT_SUCCESS,
+    cookiesToClear,
+    redirectUrl
   };
 }

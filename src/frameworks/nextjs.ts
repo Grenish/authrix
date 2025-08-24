@@ -457,7 +457,6 @@ export function withAuth<T extends Record<string, any>, U extends Record<string,
 
 // === Flexible Functions with explicit naming ===
 
-// (Flexible legacy exports removed as part of deprecation cleanup)
 
 // === API Route Handlers ===
 
@@ -500,6 +499,12 @@ export function createSigninHandler() {
       return Response.json({ error: 'Method not allowed' }, { status: 405 });
     }
     try {
+      // Guard: Edge runtime can't run native argon2/bcrypt reliably
+      if (typeof process !== 'undefined' && process.env.NEXT_RUNTIME === 'edge') {
+        return Response.json({
+          error: 'Signin not supported in edge runtime. Add `export const runtime = "nodejs";` to your route.'
+        }, { status: 500 });
+      }
       const { email, password } = await request.json();
       if (!email || !password) {
         return Response.json({ error: 'Email and password are required' }, { status: 400 });
@@ -527,7 +532,7 @@ export function createLogoutHandler() {
     }
 
     try {
-      const result = logoutCore();
+  const result = await logoutCore();
       
       const response = Response.json({
         success: true,
@@ -676,7 +681,7 @@ export function createLogoutHandlerPages() {
     }
 
     try {
-      const result = logoutCore();
+  const result = await logoutCore();
       
       // Clear cookie
       const cookie = CookieUtils.createLogoutCookie(CookieUtils.getCookieName());
@@ -853,4 +858,3 @@ export function createAuthenticatedResponse(
   return response;
 }
 
-// Deprecation wrappers removed.

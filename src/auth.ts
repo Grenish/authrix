@@ -1,179 +1,273 @@
-// Unified Authrix namespace API (Phase: API Surface Consolidation P0)
-// Provides grouped, discoverable entrypoints while preserving existing flat exports.
-// Intent: Non-breaking addition. Legacy exports remain until deprecation cycle.
+import {
+  signupCore,
+  type SignupOptions,
+  type SignupResult,
+} from "./core/signup";
+import {
+  signinCore,
+  type SigninOptions,
+  type SigninResult,
+} from "./core/signin";
+import {
+  logoutCore,
+  type LogoutOptions,
+  type LogoutResult,
+} from "./core/logout";
+import { getCurrentUserFromToken, isTokenValid } from "./core/session";
+import { internalCookies } from "./internal/cookies";
+import { requireAuth } from "./core/requireAuth";
 
-import { signupCore, type SignupOptions, type SignupResult } from './core/signup';
-import { signinCore, type SigninOptions, type SigninResult } from './core/signin';
-import { logoutCore, type LogoutOptions, type LogoutResult } from './core/logout';
-import { getCurrentUserFromToken, isTokenValid } from './core/session';
-import { internalCookies } from './internal/cookies';
-import { requireAuth } from './core/requireAuth';
-import { authConfig } from './config';
+// Lazy-loaded module cache
+let nextModule: any = null;
+let isNextLoading = false;
+let nextLoadError: Error | null = null;
 
-// Lazy dynamic import wrapper for Next.js specific utilities to avoid pulling them
-// into non-Next environments / enable tree-shaking.
 async function loadNext(): Promise<any | null> {
-  try { return await import('./frameworks/nextjs'); } catch { return null; }
+  if (nextModule) return nextModule;
+  if (nextLoadError) return null;
+  if (isNextLoading) {
+    // Wait for ongoing load to complete
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return loadNext();
+  }
+
+  isNextLoading = true;
+  try {
+    nextModule = await import("./frameworks/nextjs");
+    return nextModule;
+  } catch (error) {
+    nextLoadError = error as Error;
+    return null;
+  } finally {
+    isNextLoading = false;
+  }
 }
 
-// Shared helpers
-interface ActionContext { res?: any; req?: any; }
+// Types
+interface ActionContext {
+  res?: any;
+  req?: any;
+}
 
-export interface AuthActionResult<TUser> { user: TUser; token?: string; meta?: Record<string, any>; }
+export interface AuthActionResult<TUser> {
+  user: TUser;
+  token?: string;
+  meta?: Record<string, any>;
+}
 
-async function performSignup(email: string, password: string, options: SignupOptions = {}, ctx?: ActionContext): Promise<AuthActionResult<SignupResult['user']>> {
-  const coreResult = await signupCore(email, password, options);
+type NextRouteHandler = (request: Request) => Promise<Response>;
+
+// Constants
+const HANDLER_MAP = {
+  signup: "createSignupHandler",
+  signin: "createSigninHandler",
+  logout: "createLogoutHandler",
+  currentUser: "createCurrentUserHandler",
+  validateToken: "createTokenValidationHandler",
+} as const;
+
+const ERROR_MESSAGES = {
+  NOT_INITIALIZED:
+    "Auth not initialized. Call initAuth({ jwtSecret, db }) before using handlers.",
+  HANDLER_UNAVAILABLE: (name: string) => `${name} handler unavailable`,
+  UNKNOWN_HANDLER: (name: string) => `Unknown handler ${name}`,
+  NEXT_NOT_AVAILABLE: (name: string) =>
+    `Next.js handlers not available (attempted: ${name}).`,
+} as const;
+
+// Helper functions
+async function performAuth<T extends { user: any; token?: string }>(
+  coreFn: () => Promise<T>,
+  ctx?: ActionContext
+): Promise<AuthActionResult<T["user"]>> {
+  const result = await coreFn();
   // Future: attempt cookie set via next flexible util when available.
-  void ctx; // placeholder to suppress unused warning for now
-  return { user: coreResult.user, token: coreResult.token, meta: { source: 'core' } };
-}
-
-async function performSignin(email: string, password: string, options: SigninOptions = {}, ctx?: ActionContext): Promise<AuthActionResult<SigninResult['user']>> {
-  const coreResult = await signinCore(email, password, options);
-  void ctx;
-  return { user: coreResult.user, token: coreResult.token, meta: { source: 'core' } };
-}
-
-async function performLogout(options: LogoutOptions = {}, ctx?: ActionContext): Promise<LogoutResult> {
-  void ctx;
-  return logoutCore(options);
+  void ctx; // placeholder to suppress unused warning
+  return {
+    user: result.user,
+    token: result.token,
+    meta: { source: "core" },
+  };
 }
 
 async function resolveToken(ctx?: ActionContext): Promise<string | null> {
+  if (!ctx?.req?.cookies) return null;
   const cookieName = internalCookies.getAuthCookieName();
-  const cookieVal = ctx?.req?.cookies?.[cookieName];
-  return cookieVal || null;
+  return ctx.req.cookies[cookieName] || null;
 }
 
+async function resolveHandler(name: keyof typeof HANDLER_MAP) {
+  const mod = await loadNext();
+  if (!mod) {
+    throw new Error(ERROR_MESSAGES.NEXT_NOT_AVAILABLE(name));
+  }
+
+  const factoryName = HANDLER_MAP[name];
+  const fnFactory = mod[factoryName];
+
+  if (!fnFactory) {
+    throw new Error(ERROR_MESSAGES.UNKNOWN_HANDLER(name));
+  }
+
+  return fnFactory();
+}
+
+function createErrorResponse(message: string, status = 500): Response {
+  return Response.json({ success: false, error: { message } }, { status });
+}
+
+function createRouteHandler(
+  handlerName: keyof typeof HANDLER_MAP,
+  requiresInit = false
+): NextRouteHandler {
+  // Return an async function so dynamic imports still work inside without forcing outer factory async
+  return async (request: Request) => {
+    try {
+      if (requiresInit) {
+        const { isAuthrixInitialized } = await import("./config/index");
+        if (!isAuthrixInitialized?.()) {
+          return createErrorResponse(ERROR_MESSAGES.NOT_INITIALIZED);
+        }
+      }
+
+      const handler = await resolveHandler(handlerName);
+      return handler(request);
+    } catch (err: any) {
+      const message =
+        err?.message || ERROR_MESSAGES.HANDLER_UNAVAILABLE(handlerName);
+      return createErrorResponse(message);
+    }
+  };
+}
+
+// Middleware functions
+function createMiddleware(attachUser: boolean) {
+  return (handler: any) => async (req: any, res: any) => {
+    try {
+      const user = await getUser({ req });
+      (req as any).user = user || null;
+    } catch {
+      if (attachUser) {
+        (req as any).user = null;
+      }
+    }
+    return handler(req, res);
+  };
+}
+
+// Actions
+const actions = {
+  signup: (
+    email: string,
+    password: string,
+    options: SignupOptions = {},
+    ctx?: ActionContext
+  ) => performAuth(() => signupCore(email, password, options), ctx),
+
+  signin: (
+    email: string,
+    password: string,
+    options: SigninOptions = {},
+    ctx?: ActionContext
+  ) => performAuth(() => signinCore(email, password, options), ctx),
+
+  logout: (
+    options: LogoutOptions = {},
+    ctx?: ActionContext
+  ): Promise<LogoutResult> => {
+    void ctx;
+    return logoutCore(options);
+  },
+} as const;
+
+// Session
 async function getUser(ctx?: ActionContext) {
   const token = await resolveToken(ctx);
   return getCurrentUserFromToken(token);
 }
 
-async function isAuthed(ctx?: ActionContext) {
+async function isAuthenticated(ctx?: ActionContext) {
   const token = await resolveToken(ctx);
   return isTokenValid(token);
 }
 
-// Middleware variants
-function middlewareGuard() { return requireAuth; }
-function middlewareOptional(handler: any) {
-  return async (req: any, res: any) => {
-    try {
-      const user = await getUser({ req });
-      (req as any).user = user || null;
-      return handler(req, res);
-    } catch {
-      (req as any).user = null;
-      return handler(req, res);
-    }
-  };
-}
-function middlewareWithUser(handler: any) { return middlewareOptional(handler); }
-const middleware = { require: requireAuth, guard: middlewareGuard(), optional: middlewareOptional, withUser: middlewareWithUser };
+const session = {
+  getUser,
+  isAuthenticated,
+} as const;
 
-async function resolveHandler(name: string) {
-  const mod = await loadNext();
-  if (!mod) throw new Error(`Next.js handlers not available (attempted: ${name}).`);
-  const map: Record<string, any> = {
-    signup: mod.createSignupHandler,
-    signin: mod.createSigninHandler,
-    logout: mod.createLogoutHandler,
-    currentUser: mod.createCurrentUserHandler,
-    validateToken: mod.createTokenValidationHandler
-  };
-  const fnFactory = map[name];
-  if (!fnFactory) throw new Error(`Unknown handler ${name}`);
-  return fnFactory();
-}
-type NextRouteHandler = (request: Request) => Promise<Response>;
+// Middleware
+const middleware = {
+  require: requireAuth,
+  guard: () => requireAuth,
+  optional: createMiddleware(true),
+  withUser: createMiddleware(true),
+} as const;
 
-/**
- * Next.js App Router compatible handlers.
- * Usage in app route: `export const POST = auth.handlers.signup;`
- * Each handler is a request-bound wrapper that always returns a Response.
- */
-const handlers: {
-  signup: NextRouteHandler;
-  signin: NextRouteHandler;
-  logout: NextRouteHandler;
-  currentUser: NextRouteHandler;
-  validateToken: NextRouteHandler;
-} = {
-  signup: async (request: Request) => {
-    try {
-      const h = await resolveHandler('signup');
-      return h(request);
-    } catch (err: any) {
-      const message = err?.message || 'Signup handler unavailable';
-      return Response.json({ success: false, error: { message } }, { status: 500 });
-    }
+// Handlers - lazy initialized
+const handlers: Record<keyof typeof HANDLER_MAP, NextRouteHandler> = {
+  get signup() {
+    const handler = createRouteHandler("signup");
+    Object.defineProperty(this, "signup", { value: handler });
+    return handler;
   },
-  signin: async (request: Request) => {
-    try {
-      const h = await resolveHandler('signin');
-      return h(request);
-    } catch (err: any) {
-      const message = err?.message || 'Signin handler unavailable';
-      return Response.json({ success: false, error: { message } }, { status: 500 });
-    }
+  get signin() {
+    const handler = createRouteHandler("signin", true);
+    Object.defineProperty(this, "signin", { value: handler });
+    return handler;
   },
-  logout: async (request: Request) => {
-    try {
-      const h = await resolveHandler('logout');
-      return h(request);
-    } catch (err: any) {
-      const message = err?.message || 'Logout handler unavailable';
-      return Response.json({ success: false, error: { message } }, { status: 500 });
-    }
+  get logout() {
+    const handler = createRouteHandler("logout");
+    Object.defineProperty(this, "logout", { value: handler });
+    return handler;
   },
-  currentUser: async (request: Request) => {
-    try {
-      const h = await resolveHandler('currentUser');
-      return h(request);
-    } catch (err: any) {
-      const message = err?.message || 'Current user handler unavailable';
-      return Response.json({ success: false, error: { message } }, { status: 500 });
-    }
+  get currentUser() {
+    const handler = createRouteHandler("currentUser");
+    Object.defineProperty(this, "currentUser", { value: handler });
+    return handler;
   },
-  validateToken: async (request: Request) => {
-    try {
-      const h = await resolveHandler('validateToken');
-      return h(request);
-    } catch (err: any) {
-      const message = err?.message || 'Token validation handler unavailable';
-      return Response.json({ success: false, error: { message } }, { status: 500 });
-    }
-  }
-};
+  get validateToken() {
+    const handler = createRouteHandler("validateToken");
+    Object.defineProperty(this, "validateToken", { value: handler });
+    return handler;
+  },
+} as any;
 
+// Cookies
 const cookies = {
-  create: (token: string, opts?: any) => internalCookies.createAuthCookieString(token, opts),
-  clear: () => internalCookies.createLogoutCookieString()
-};
+  create: (token: string, opts?: any) =>
+    internalCookies.createAuthCookieString(token, opts),
+  clear: () => internalCookies.createLogoutCookieString(),
+} as const;
 
+// Environment
 const env = {
-  detect: () => ({ isNextJs: !!(globalThis as any).EdgeRuntime || !!(globalThis as any).__NEXT_DATA__ }),
+  detect: () => ({
+    isNextJs:
+      !!(globalThis as any).EdgeRuntime || !!(globalThis as any).__NEXT_DATA__,
+  }),
   async next() {
     const mod = await loadNext();
     if (!mod) return null;
+
     return {
       info: mod.getNextJsEnvironmentInfo?.(),
       infoAsync: mod.getNextJsEnvironmentInfoAsync?.(),
       reset: mod.resetEnvironmentDetection,
       redetect: mod.redetectNextJsEnvironment,
-      injectTest: mod.forceNextJsAvailability
+      injectTest: mod.forceNextJsAvailability,
     };
-  }
-};
+  },
+} as const;
 
+// Main export
 export const auth = {
-  actions: { signup: performSignup, signin: performSignin, logout: performLogout },
-  session: { getUser, isAuthenticated: isAuthed },
+  actions,
+  session,
   middleware,
   handlers,
   cookies,
-  env
+  env,
 } as const;
 
 export type AuthNamespace = typeof auth;

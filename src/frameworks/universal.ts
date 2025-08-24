@@ -2,7 +2,7 @@
 
 import { signupCore } from "../core/signup";
 import { signinCore } from "../core/signin";
-import { logoutCore } from "../core/logout";
+import { logoutCore, logoutCoreSync } from "../core/logout";
 import { getCurrentUserFromToken, isTokenValid } from "../core/session";
 import { authConfig } from "../config";
 
@@ -108,7 +108,8 @@ export async function signinUniversal(email: string, password: string): Promise<
  * Returns cookie information for manual clearing
  */
 export function logoutUniversal(): UniversalLogoutResult {
-  return logoutCore();
+  // Use synchronous variant to satisfy return type without forcing async usage downstream
+  return logoutCoreSync();
 }
 
 /**

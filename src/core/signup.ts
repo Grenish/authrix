@@ -12,13 +12,14 @@ export interface SignupOptions {
   customUserData?: Record<string, any>;
   skipPasswordValidation?: boolean;
   generateUsername?: boolean;
-  // New optional profile fields for account creation
   username?: string;
   firstName?: string;
   lastName?: string;
   fullName?: string;
   profilePicture?: string;
-  requesterIp?: string; // P2: incorporate IP into rate limiting identifier
+  requesterIp?: string;
+  userAgent?: string;
+  rememberMe?: boolean;
 }
 
 export interface SignupResult {
@@ -43,6 +44,8 @@ export interface SignupResult {
   };
   isNewUser: boolean;
   requiresEmailVerification?: boolean;
+  passwordStrength?: number;
+  passwordEntropy?: number;
 }
 
 // Rate limiting for signup attempts (simple in-memory store)
@@ -123,6 +126,8 @@ export async function signupCore(
   fullName,
   profilePicture,
   requesterIp,
+  userAgent,
+  rememberMe = false,
   } = options;
 
   // Input validation
@@ -143,10 +148,13 @@ export async function signupCore(
   }
 
   // Enhanced password validation (unless skipped for backward compatibility)
+  let passwordStrength: number | undefined;
+  let passwordEntropy: number | undefined;
   if (!skipPasswordValidation) {
-    // Provide email local-part as user info to detect inclusion; do not penalize entropy unfairly otherwise
-    const userInfo = [normalizedEmail.split('@')[0]];
+    const userInfo = [normalizedEmail.split('@')[0]]; // local part for user-info detection
     const passwordValidation = validatePassword(password, {}, userInfo);
+    passwordStrength = passwordValidation.strength;
+    passwordEntropy = passwordValidation.entropy;
     if (!passwordValidation.isValid) {
       throw new BadRequestError(`Password validation failed: ${passwordValidation.errors.join(', ')}`);
     }
@@ -176,11 +184,20 @@ export async function signupCore(
       throw new ConflictError("An account with this email already exists");
     }
 
-    // Hash password
-    const hashedPassword = await hashPassword(password, {
+    // Hash password with advanced options (algorithm selection)
+    const hashOptions: any = {
       skipValidation: skipPasswordValidation,
-      identifier: normalizedEmail
-    });
+      identifier: rateLimitId,
+    };
+    // Allow runtime selection of algorithm via env (defaults to argon2id inside hasher)
+    if (process.env.AUTHRIX_HASH_ALGO === 'bcrypt') {
+      hashOptions.algorithm = 'bcrypt';
+    } else if (process.env.AUTHRIX_HASH_ALGO === 'argon2id') {
+      hashOptions.algorithm = 'argon2id';
+    }
+  // do NOT allow runtime override via authConfig.authPepper
+  // Any previously configured authPepper is ignored intentionally.
+    const hashedPassword = await hashPassword(password, hashOptions);
 
     // Prepare user data
     const userData: any = {
@@ -259,19 +276,33 @@ export async function signupCore(
       }
     }
 
-    return {
+    const result: SignupResult = {
       user: userResponse,
       token,
       cookieOptions: {
         httpOnly: true,
   secure: authConfig.forceSecureCookies || process.env.NODE_ENV === "production",
-        maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+        maxAge: rememberMe ? 1000 * 60 * 60 * 24 * 30 : (authConfig.sessionMaxAgeMs || (1000 * 60 * 60 * 24 * 7)),
         sameSite: "lax" as const,
         path: "/",
       },
       isNewUser: true,
-      requiresEmailVerification: requireEmailVerification
+      requiresEmailVerification: requireEmailVerification,
+      passwordStrength,
+      passwordEntropy
     };
+
+    logger.info('[AUTHRIX][auth] signup success', {
+      userId: user.id,
+      email: normalizedEmail,
+      ip: requesterIp,
+      userAgent,
+      rememberMe,
+      passwordStrength,
+      passwordEntropy
+    });
+
+    return result;
 
   } catch (error) {
     // Log failed attempt for monitoring
@@ -294,11 +325,26 @@ export async function signup(
   res: Response,
   options?: SignupOptions
 ): Promise<SignupResult['user']> {
-  const result = await signupCore(email, password, options);
+  const req = (res as any).req;
+  const enhancedOptions: SignupOptions = {
+    ...options,
+    requesterIp: options?.requesterIp || req?.ip || req?.connection?.remoteAddress,
+    userAgent: options?.userAgent || req?.get?.('user-agent')
+  };
+  const result = await signupCore(email, password, enhancedOptions);
 
   // Set authentication cookie if auto-signin is enabled
   if (options?.autoSignin !== false) {
     res.cookie(authConfig.cookieName, result.token, result.cookieOptions);
+    if (enhancedOptions.rememberMe) {
+      res.cookie(`${authConfig.cookieName}_remember`, 'true', {
+        httpOnly: true,
+        secure: result.cookieOptions.secure,
+        maxAge: result.cookieOptions.maxAge,
+        sameSite: 'lax',
+        path: '/'
+      });
+    }
   }
 
   return result.user;

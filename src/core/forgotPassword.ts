@@ -1,7 +1,16 @@
 import { randomUUID } from "crypto";
 import { authConfig } from "../config";
-import { hashPassword, verifyPassword, validatePassword, generateSecurePassword } from "../utils/hash";
-import { BadRequestError, UnauthorizedError, InternalServerError } from "../utils/errors";
+import {
+  hashPassword,
+  verifyPassword,
+  validatePassword,
+  generateSecurePassword,
+} from "../utils/hash";
+import {
+  BadRequestError,
+  UnauthorizedError,
+  InternalServerError,
+} from "../utils/errors";
 import { generateTwoFactorCode, verifyTwoFactorCode } from "./twoFactor";
 
 export interface ForgotPasswordOptions {
@@ -11,7 +20,11 @@ export interface ForgotPasswordOptions {
   rateLimitDelay?: number; // in seconds
   requireExistingUser?: boolean;
   useEmailService?: boolean; // Use 2FA email service instead of console logging
-  customEmailTemplate?: (email: string, code: string, username?: string) => {
+  customEmailTemplate?: (
+    email: string,
+    code: string,
+    username?: string
+  ) => {
     subject: string;
     text: string;
     html?: string;
@@ -46,16 +59,22 @@ export interface ResetPasswordResult {
 }
 
 // Rate limiting for password reset requests
-const rateLimitStore = new Map<string, {
-  count: number;
-  lastAttempt: number;
-  blockedUntil?: number;
-}>();
+const rateLimitStore = new Map<
+  string,
+  {
+    count: number;
+    lastAttempt: number;
+    blockedUntil?: number;
+  }
+>();
 
 /**
  * Enhanced rate limiting with progressive blocking
  */
-function checkPasswordResetRateLimit(email: string, rateLimitDelay: number = 60): {
+function checkPasswordResetRateLimit(
+  email: string,
+  rateLimitDelay: number = 60
+): {
   allowed: boolean;
   attemptsRemaining: number;
   blockedUntil?: Date;
@@ -79,7 +98,7 @@ function checkPasswordResetRateLimit(email: string, rateLimitDelay: number = 60)
       allowed: false,
       attemptsRemaining: 0,
       blockedUntil: new Date(attempts.blockedUntil),
-      nextAttemptIn: Math.ceil((attempts.blockedUntil - now) / 1000)
+      nextAttemptIn: Math.ceil((attempts.blockedUntil - now) / 1000),
     };
   }
 
@@ -94,7 +113,9 @@ function checkPasswordResetRateLimit(email: string, rateLimitDelay: number = 60)
     return {
       allowed: false,
       attemptsRemaining: maxAttemptsPerHour - attempts.count,
-      nextAttemptIn: Math.ceil((rateLimitDelay * 1000 - (now - attempts.lastAttempt)) / 1000)
+      nextAttemptIn: Math.ceil(
+        (rateLimitDelay * 1000 - (now - attempts.lastAttempt)) / 1000
+      ),
     };
   }
 
@@ -109,13 +130,13 @@ function checkPasswordResetRateLimit(email: string, rateLimitDelay: number = 60)
     return {
       allowed: false,
       attemptsRemaining: 0,
-      blockedUntil: new Date(attempts.blockedUntil)
+      blockedUntil: new Date(attempts.blockedUntil),
     };
   }
 
   return {
     allowed: true,
-    attemptsRemaining: maxAttemptsPerHour - attempts.count
+    attemptsRemaining: maxAttemptsPerHour - attempts.count,
   };
 }
 
@@ -136,7 +157,9 @@ export async function initiateForgotPassword(
   const db = authConfig.db;
 
   if (!db) {
-    throw new InternalServerError("Database not configured. Make sure initAuth() is called before using forgot password functions.");
+    throw new InternalServerError(
+      "Database not configured. Make sure initAuth() is called before using forgot password functions."
+    );
   }
 
   const {
@@ -146,7 +169,7 @@ export async function initiateForgotPassword(
     rateLimitDelay = 60, // 60 seconds
     requireExistingUser = true,
     useEmailService = true,
-    customEmailTemplate
+    customEmailTemplate,
   } = options;
 
   // Input validation
@@ -163,8 +186,12 @@ export async function initiateForgotPassword(
   }
 
   // Check rate limiting
-  const bypassRateLimit = process.env.AUTHRIX_TEST_BYPASS_FP_RATE_LIMIT === 'true';
-  const rateLimitCheck = checkPasswordResetRateLimit(normalizedEmail, rateLimitDelay);
+  const bypassRateLimit =
+    process.env.AUTHRIX_TEST_BYPASS_FP_RATE_LIMIT === "true";
+  const rateLimitCheck = checkPasswordResetRateLimit(
+    normalizedEmail,
+    rateLimitDelay
+  );
   if (!bypassRateLimit && !rateLimitCheck.allowed) {
     const message = rateLimitCheck.blockedUntil
       ? `Too many password reset attempts. Try again after ${rateLimitCheck.blockedUntil.toLocaleTimeString()}`
@@ -180,7 +207,8 @@ export async function initiateForgotPassword(
       // In strict privacy contexts we would return generic message, but tests expect generic path only when requireExistingUser true
       return {
         success: true,
-        message: "If an account with this email exists, a password reset code has been sent."
+        message:
+          "If an account with this email exists, a password reset code has been sent.",
       };
     }
 
@@ -192,28 +220,31 @@ export async function initiateForgotPassword(
     // Use 2FA system for code generation and sending
     if (useEmailService) {
       try {
-        const { initiateEmailVerification } = await import('./twoFactor');
+        const { initiateEmailVerification } = await import("./twoFactor");
 
-        const result = await initiateEmailVerification(user!.id, normalizedEmail, {
-          codeLength,
-          expiryMinutes: codeExpiration,
-          subject: "Password Reset Code",
-          metadata: {
-            purpose: 'password_reset',
-            username: user?.username
+        const result = await initiateEmailVerification(
+          user!.id,
+          normalizedEmail,
+          {
+            codeLength,
+            expiryMinutes: codeExpiration,
+            subject: "Password Reset Code",
+            metadata: {
+              purpose: "password_reset",
+              username: user?.username,
+            },
           }
-        });
+        );
 
         return {
           success: true,
           message: "Password reset code sent to your email address.",
           codeId: result.codeId,
           codeExpiration: result.expiresAt,
-          attemptsRemaining: result.attemptsRemaining
+          attemptsRemaining: result.attemptsRemaining,
         };
-
       } catch (error) {
-        console.error('[AUTHRIX] Failed to send password reset email:', error);
+        console.error("[AUTHRIX] Failed to send password reset email:", error);
         // Fallback to console logging
         console.log(`[AUTHRIX] Email service failed, check configuration`);
       }
@@ -221,31 +252,34 @@ export async function initiateForgotPassword(
 
     // Fallback: Generate code using 2FA system but log to console
     const { code, codeId, expiresAt } = await generateTwoFactorCode(user!.id, {
-      type: 'password_reset',
+      type: "password_reset",
       codeLength,
       expiryMinutes: codeExpiration,
-      metadata: { email: normalizedEmail, purpose: 'password_reset' }
+      metadata: { email: normalizedEmail, purpose: "password_reset" },
     });
 
     // Log code to console (development/fallback)
-    console.log(`[AUTHRIX] Password reset code for ${normalizedEmail}: ${code}`);
+    console.log(
+      `[AUTHRIX] Password reset code for ${normalizedEmail}: ${code}`
+    );
     console.log(`[AUTHRIX] Code expires at: ${expiresAt.toLocaleString()}`);
 
     return {
       success: true,
       message: "Password reset code sent to your email address.",
       codeId,
-      codeExpiration: expiresAt
+      codeExpiration: expiresAt,
     };
-
   } catch (error) {
-    console.error('[AUTHRIX] Forgot password error:', error);
+    console.error("[AUTHRIX] Forgot password error:", error);
 
     if (error instanceof BadRequestError) {
       throw error;
     }
 
-    throw new InternalServerError(`Failed to send password reset code: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new InternalServerError(
+      `Failed to send password reset code: ${error instanceof Error ? error.message : "Unknown error"}`
+    );
   }
 }
 
@@ -261,7 +295,9 @@ export async function resetPasswordWithCode(
   const db = authConfig.db;
 
   if (!db) {
-    throw new InternalServerError("Database not configured. Make sure initAuth() is called before using forgot password functions.");
+    throw new InternalServerError(
+      "Database not configured. Make sure initAuth() is called before using forgot password functions."
+    );
   }
 
   const {
@@ -269,7 +305,7 @@ export async function resetPasswordWithCode(
     requireStrongPassword = true,
     invalidateAllSessions = true,
     preventReuse = true,
-    skipPasswordValidation = false
+    skipPasswordValidation = false,
   } = options;
 
   // Input validation
@@ -290,13 +326,17 @@ export async function resetPasswordWithCode(
   // Password validation
   if (!skipPasswordValidation) {
     if (requireStrongPassword) {
-      const userInfo = [normalizedEmail.split('@')[0]];
+      const userInfo = [normalizedEmail.split("@")[0]];
       const validation = validatePassword(newPassword, {}, userInfo);
       if (!validation.isValid) {
-        throw new BadRequestError(`Password validation failed: ${validation.errors.join(', ')}`);
+        throw new BadRequestError(
+          `Password validation failed: ${validation.errors.join(", ")}`
+        );
       }
     } else if (newPassword.length < minPasswordLength) {
-      throw new BadRequestError(`Password must be at least ${minPasswordLength} characters long`);
+      throw new BadRequestError(
+        `Password must be at least ${minPasswordLength} characters long`
+      );
     }
   }
 
@@ -308,11 +348,13 @@ export async function resetPasswordWithCode(
     }
 
     // Get user's active password reset codes
-    const { getUserTwoFactorCodes } = await import('./twoFactor');
-    const userCodes = await getUserTwoFactorCodes(user.id, 'password_reset');
+    const { getUserTwoFactorCodes } = await import("./twoFactor");
+    const userCodes = await getUserTwoFactorCodes(user.id, "password_reset");
 
     if (userCodes.length === 0) {
-      throw new UnauthorizedError("No valid reset code found. Please request a new password reset.");
+      throw new UnauthorizedError(
+        "No valid reset code found. Please request a new password reset."
+      );
     }
 
     // Try to verify the code with any of the user's active codes
@@ -336,30 +378,40 @@ export async function resetPasswordWithCode(
 
     // Ensure adapter supports update before performing expensive operations & reuse check order for tests
     if (!db.updateUser) {
-      throw new InternalServerError("Database adapter does not support password updates");
+      throw new InternalServerError(
+        "Database adapter does not support password updates"
+      );
     }
 
     // Check if new password is same as current (if preventReuse is enabled) AFTER adapter capability check
     if (preventReuse && user.password) {
-      const isSamePassword = await verifyPassword(newPassword, user.password).catch((err) => {
-        console.warn('[AUTHRIX] Could not compare passwords for reuse prevention:', err);
+      const isSamePassword = await verifyPassword(
+        newPassword,
+        user.password
+      ).catch((err) => {
+        console.warn(
+          "[AUTHRIX] Could not compare passwords for reuse prevention:",
+          err
+        );
         return false; // Fail-open
       });
       if (isSamePassword) {
-        throw new BadRequestError("New password cannot be the same as your current password");
+        throw new BadRequestError(
+          "New password cannot be the same as your current password"
+        );
       }
     }
 
     // Hash new password
     const hashedPassword = await hashPassword(newPassword, {
-      skipValidation: skipPasswordValidation
+      skipValidation: skipPasswordValidation,
     });
 
     // Update user password
     const updatedUser = await db.updateUser(user.id, {
       password: hashedPassword,
       passwordChangedAt: new Date(),
-      mustChangePassword: false // Reset the flag since they just changed it
+      mustChangePassword: false, // Reset the flag since they just changed it
     });
 
     if (!updatedUser) {
@@ -371,7 +423,7 @@ export async function resetPasswordWithCode(
 
     // TODO: Invalidate all sessions if requested
     if (invalidateAllSessions) {
-      console.log('[AUTHRIX] Session invalidation not implemented yet');
+      console.log("[AUTHRIX] Session invalidation not implemented yet");
       // This would require:
       // 1. Token blacklisting for JWTs
       // 2. Session management in database
@@ -384,19 +436,23 @@ export async function resetPasswordWithCode(
       user: {
         id: updatedUser.id,
         email: updatedUser.email,
-        username: updatedUser.username
+        username: updatedUser.username,
       },
-      mustChangePassword: false
+      mustChangePassword: false,
     };
-
   } catch (error) {
-    console.error('[AUTHRIX] Password reset error:', error);
+    console.error("[AUTHRIX] Password reset error:", error);
 
-    if (error instanceof BadRequestError || error instanceof UnauthorizedError) {
+    if (
+      error instanceof BadRequestError ||
+      error instanceof UnauthorizedError
+    ) {
       throw error;
     }
 
-    throw new InternalServerError(`Failed to reset password: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new InternalServerError(
+      `Failed to reset password: ${error instanceof Error ? error.message : "Unknown error"}`
+    );
   }
 }
 
@@ -405,7 +461,9 @@ export async function resetPasswordWithCode(
  */
 export function generateTemporaryPassword(length: number = 12): string {
   if (length < 8 || length > 32) {
-    throw new BadRequestError('Temporary password length must be between 8 and 32 characters');
+    throw new BadRequestError(
+      "Temporary password length must be between 8 and 32 characters"
+    );
   }
 
   return generateSecurePassword(length, {
@@ -413,7 +471,7 @@ export function generateTemporaryPassword(length: number = 12): string {
     includeUppercase: true,
     includeNumbers: true,
     includeSymbols: true,
-    excludeSimilar: true
+    excludeAmbiguous: true,
   });
 }
 
@@ -427,14 +485,16 @@ export async function sendTemporaryPassword(
   const db = authConfig.db;
 
   if (!db) {
-    throw new InternalServerError("Database not configured. Make sure initAuth() is called before using forgot password functions.");
+    throw new InternalServerError(
+      "Database not configured. Make sure initAuth() is called before using forgot password functions."
+    );
   }
 
   const {
     temporaryPasswordLength = 12,
     requireExistingUser = true,
     customEmailTemplate,
-    rateLimitDelay = 60
+    rateLimitDelay = 60,
   } = options;
 
   // Input validation
@@ -451,8 +511,12 @@ export async function sendTemporaryPassword(
   }
 
   // Check rate limiting
-  const bypassRateLimit = process.env.AUTHRIX_TEST_BYPASS_FP_RATE_LIMIT === 'true';
-  const rateLimitCheck = checkPasswordResetRateLimit(normalizedEmail, rateLimitDelay);
+  const bypassRateLimit =
+    process.env.AUTHRIX_TEST_BYPASS_FP_RATE_LIMIT === "true";
+  const rateLimitCheck = checkPasswordResetRateLimit(
+    normalizedEmail,
+    rateLimitDelay
+  );
   if (!bypassRateLimit && !rateLimitCheck.allowed) {
     const message = rateLimitCheck.blockedUntil
       ? `Too many password reset attempts. Try again after ${rateLimitCheck.blockedUntil.toLocaleTimeString()}`
@@ -467,7 +531,8 @@ export async function sendTemporaryPassword(
     if (!user && requireExistingUser) {
       return {
         success: true,
-        message: "If an account with this email exists, a temporary password has been sent."
+        message:
+          "If an account with this email exists, a temporary password has been sent.",
       };
     }
 
@@ -476,7 +541,9 @@ export async function sendTemporaryPassword(
     }
 
     // Generate secure temporary password
-    const temporaryPassword = generateTemporaryPassword(temporaryPasswordLength);
+    const temporaryPassword = generateTemporaryPassword(
+      temporaryPasswordLength
+    );
     const hashedPassword = await hashPassword(temporaryPassword);
 
     // Update user password
@@ -485,10 +552,12 @@ export async function sendTemporaryPassword(
       updatedUser = await db.updateUser(user!.id, {
         password: hashedPassword,
         passwordChangedAt: new Date(),
-        mustChangePassword: true // Force password change on next login
+        mustChangePassword: true, // Force password change on next login
       });
     } else {
-      throw new InternalServerError("Database adapter does not support password updates");
+      throw new InternalServerError(
+        "Database adapter does not support password updates"
+      );
     }
 
     if (!updatedUser) {
@@ -499,22 +568,26 @@ export async function sendTemporaryPassword(
     clearPasswordResetRateLimit(normalizedEmail);
 
     // Log temporary password (in production, send via email service)
-    console.log(`[AUTHRIX] Temporary password for ${normalizedEmail}: ${temporaryPassword}`);
+    console.log(
+      `[AUTHRIX] Temporary password for ${normalizedEmail}: ${temporaryPassword}`
+    );
     console.log(`[AUTHRIX] User must change password on next login`);
 
     return {
       success: true,
-      message: "Temporary password sent to your email address. Please log in and change your password immediately."
+      message:
+        "Temporary password sent to your email address. Please log in and change your password immediately.",
     };
-
   } catch (error) {
-    console.error('[AUTHRIX] Temporary password error:', error);
+    console.error("[AUTHRIX] Temporary password error:", error);
 
     if (error instanceof BadRequestError) {
       throw error;
     }
 
-    throw new InternalServerError(`Failed to send temporary password: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new InternalServerError(
+      `Failed to send temporary password: ${error instanceof Error ? error.message : "Unknown error"}`
+    );
   }
 }
 
@@ -541,7 +614,7 @@ export function getPasswordResetStats(): {
     totalAttempts += attempts.count;
 
     if (attempts.blockedUntil && now < attempts.blockedUntil) {
-      const email = key.replace('forgot_password_', '');
+      const email = key.replace("forgot_password_", "");
       blockedEmails.push(email);
     }
   }
@@ -549,6 +622,6 @@ export function getPasswordResetStats(): {
   return {
     activeRateLimits: rateLimitStore.size,
     blockedEmails,
-    totalAttempts
+    totalAttempts,
   };
 }

@@ -13,7 +13,7 @@ class AuthConfigSingleton {
   private _sessionMaxAgeMs: number = 1000 * 60 * 60 * 24 * 7; // default 7d
   private _rollingSessionEnabled: boolean = false;
   private _rollingSessionThresholdSeconds: number = 60 * 60 * 24; // 24h remaining triggers refresh by default
-  private _authPepper?: string; // optional explicit password pepper override
+  private _authPepper?: string; 
 
   private constructor() {}
 
@@ -119,6 +119,11 @@ class AuthConfigSingleton {
     if (config.authPepper) {
       this._authPepper = config.authPepper;
     }
+    
+      if (this._authPepper) {
+        // Option A: authPepper override deprecated and ignored.
+        console.warn('[Authrix] authPepper is deprecated and ignored. Use AUTHRIX_PASSWORD_PEPPER env instead.');
+      }
 
     if (config.cookieName) {
       this._cookieName = config.cookieName;

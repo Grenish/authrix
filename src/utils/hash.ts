@@ -1,17 +1,22 @@
 import * as bcrypt from "bcryptjs";
 import * as argon2 from "argon2";
-import { createHash, randomBytes, timingSafeEqual } from "crypto";
-import { authConfig } from "../config";
-import { promisify } from "util";
+import { createHash, randomBytes, timingSafeEqual, createHmac } from "crypto";
 import { Worker } from "worker_threads";
+import { promisify } from "util";
+import { EventEmitter } from "events";
 
-// ============================= Types & Interfaces =============================
+// Types & Interfaces
 
 interface PasswordValidationResult {
   isValid: boolean;
   errors: string[];
   strength: number; // 0-100
   entropy: number;
+  metadata?: {
+    hasCompromisedPatterns: boolean;
+    characterDiversity: number;
+    sequentialCharacters: number;
+  };
 }
 
 interface HashOptions {
@@ -19,11 +24,13 @@ interface HashOptions {
   identifier?: string;
   algorithm?: "bcrypt" | "argon2id";
   pepper?: string;
+  metadata?: Record<string, unknown>;
 }
 
 interface VerifyOptions {
   identifier?: string;
   updateHash?: boolean;
+  skipRateLimit?: boolean;
 }
 
 interface PasswordPolicy {
@@ -36,233 +43,263 @@ interface PasswordPolicy {
   minEntropy: number;
   preventCommonPasswords: boolean;
   preventUserInfo: boolean;
+  preventSequentialPatterns: boolean;
+  maxConsecutiveCharacters: number;
 }
 
 interface RateLimitEntry {
   attempts: number[];
   blocked: boolean;
   blockUntil?: number;
+  consecutiveFailures: number;
 }
 
-// ============================= Configuration =============================
+interface SecurityMetrics {
+  totalHashOperations: number;
+  totalVerifyOperations: number;
+  failedVerifications: number;
+  rateLimitBlocks: number;
+  rehashesPerformed: number;
+  averageHashTime: number;
+  averageVerifyTime: number;
+}
+
+// Security Event Emitter
+
+class SecurityEventEmitter extends EventEmitter {
+  public emitSecurityEvent(event: string, data: Record<string, unknown>): void {
+    this.emit('security', { event, timestamp: Date.now(), ...data });
+  }
+}
+
+const securityEvents = new SecurityEventEmitter();
+
+// Configuration
+
+import os from 'os';
 
 class SecurityConfig {
   // Bcrypt configuration
   public readonly BCRYPT_ROUNDS: number;
-
+  
   // Argon2 configuration
   public readonly ARGON2_TIME_COST: number;
-  public readonly ARGON2_MEMORY_COST: number; // in KiB
+  public readonly ARGON2_MEMORY_COST: number;
   public readonly ARGON2_PARALLELISM: number;
-
-  // Password constraints (can be relaxed for backward compatibility unless strict mode enabled)
+  public readonly ARGON2_SALT_LENGTH: number = 16;
+  
+  // Password constraints
   public readonly MIN_PASSWORD_LENGTH: number;
-  public readonly MAX_PASSWORD_LENGTH = 256; // Increased from 128
-  public readonly MIN_ENTROPY: number; // Minimum entropy bits
-
+  public readonly MAX_PASSWORD_LENGTH: number = 256;
+  public readonly MIN_ENTROPY: number;
+  
   // Rate limiting
-  public readonly MAX_ATTEMPTS_PER_MINUTE = 5; // Reduced from 10
-  public readonly MAX_ATTEMPTS_PER_HOUR = 20;
-  public readonly BLOCK_DURATION = 15 * 60 * 1000; // 15 minutes
-  public readonly RATE_LIMIT_WINDOW = 60 * 1000;
-
-  // Security pepper (should be stored securely, e.g., in environment variable or secret manager)
-  private PEPPER: string;
-  private DEV_GENERATED = false;
-  private DEV_DERIVED = false;
-  private PREV_PEPPER?: string; // keep last pepper to verify legacy hashes during dev switches
-
-  public readonly STRICT_MODE: boolean;
-  public readonly ALLOW_PREV_PEPPER_FALLBACK: boolean;
+  public readonly MAX_ATTEMPTS_PER_MINUTE: number = 5;
+  public readonly MAX_ATTEMPTS_PER_HOUR: number = 20;
+  public readonly BLOCK_DURATION: number = 15 * 60 * 1000; // 15 minutes
+  public readonly PROGRESSIVE_DELAY_ENABLED: boolean = true;
+  
+  // Security
+  private readonly PEPPER: string;
+  private readonly PEPPER_ROTATION_KEY?: string;
+  public readonly USE_WORKER_THREADS: boolean;
+  public readonly MAX_CONCURRENT_OPERATIONS: number;
+  
+  // Monitoring
+  public readonly ENABLE_METRICS: boolean;
+  public readonly METRICS_INTERVAL: number = 60000; // 1 minute
 
   constructor() {
-    this.STRICT_MODE = (process.env.AUTHRIX_STRICT_PASSWORD_POLICY || '').toLowerCase() === 'true';
-
-    // Allow previous-pepper verification fallback (primarily for dev ergonomics)
-    // Defaults: enabled in non-production when unset; can be forced on/off via env
-    const rawPrevPepperFlag = (process.env.AUTHRIX_ALLOW_PREV_PEPPER_FALLBACK || '').toLowerCase();
-    const parsedPrevFlag = rawPrevPepperFlag === 'true' || rawPrevPepperFlag === '1' || rawPrevPepperFlag === 'yes'
-      ? true
-      : rawPrevPepperFlag === 'false' || rawPrevPepperFlag === '0' || rawPrevPepperFlag === 'no'
-        ? false
-        : undefined;
-    this.ALLOW_PREV_PEPPER_FALLBACK = typeof parsedPrevFlag === 'boolean' ? parsedPrevFlag : (process.env.NODE_ENV !== 'production');
-
-    // Parse bcrypt rounds (allow lower rounds in non-strict/dev mode for test compatibility)
-    const envRounds = parseInt(process.env.AUTHRIX_BCRYPT_ROUNDS || "", 10);
-    this.BCRYPT_ROUNDS = this.validateBcryptRounds(envRounds);
-
-    // Argon2 tuning (allow env overrides & lighter settings in test / non-strict mode for resource efficiency)
-    const envTime = parseInt(process.env.AUTHRIX_ARGON2_TIME_COST || "", 10);
-    const envMem = parseInt(process.env.AUTHRIX_ARGON2_MEMORY_COST || "", 10); // KiB
-    const envPar = parseInt(process.env.AUTHRIX_ARGON2_PARALLELISM || "", 10);
-
-    const isTestEnv = !!process.env.JEST_WORKER_ID || process.env.NODE_ENV === 'test';
-
-    this.ARGON2_TIME_COST = !isNaN(envTime) && envTime >= 2 && envTime <= 6
-      ? envTime
-      : (isTestEnv && !this.STRICT_MODE ? 2 : 3);
-
-    // Use lower memory cost in test/non-strict mode to keep heap usage low for concurrent hashing
-    if (this.STRICT_MODE) {
-      this.ARGON2_MEMORY_COST = !isNaN(envMem) && envMem >= 32768 ? envMem : 65536; // 64MB default
-    } else {
-      // Non-strict: allow much lower for speed & memory (especially under Jest)
-      // Lower the floor further in test environment to keep below memory test threshold
-      const testFloor = 1024; // 1MB floor for tests
-      const normalFloor = 4096; // 4MB floor otherwise
-      this.ARGON2_MEMORY_COST = !isNaN(envMem)
-        ? Math.max(isTestEnv ? testFloor : normalFloor, envMem)
-        : isTestEnv
-          ? 2048 // 2MB during tests to keep heap very low while retaining some Argon2 hardness
-          : 32768; // 32MB default non-strict
-    }
-
-    this.ARGON2_PARALLELISM = !isNaN(envPar) && envPar >= 1 && envPar <= 8
-      ? envPar
-      : (this.STRICT_MODE ? 4 : (isTestEnv ? 2 : 3));
-
-    // Set dynamic policy based on strict mode
-    if (this.STRICT_MODE) {
-      this.MIN_PASSWORD_LENGTH = 12;
-      this.MIN_ENTROPY = 50;
-    } else {
-      // Backward compatible defaults matching earlier library expectations
-      this.MIN_PASSWORD_LENGTH = 8;
-      this.MIN_ENTROPY = 30; // Allow lower entropy threshold; tests assert >50 for strong samples explicitly
-    }
-
-    // Load pepper from secure storage with stable dev fallback
-    const explicitPepper = authConfig?.authPepper;
-    const envPepper = process.env.AUTHRIX_PASSWORD_PEPPER;
-    const isProd = process.env.NODE_ENV === 'production';
-    if (!explicitPepper && !envPepper && isProd) {
-      throw new Error('AUTHRIX_PASSWORD_PEPPER must be configured in production');
-    }
-    if (explicitPepper) {
-      this.PEPPER = explicitPepper;
-    } else if (envPepper) {
-      this.PEPPER = envPepper;
-    } else {
-      // Dev/test: derive a stable fallback from jwtSecret when available to avoid per-restart drift
-      const jwt = (authConfig && typeof authConfig.jwtSecret === 'string') ? authConfig.jwtSecret : '';
-      if (jwt && jwt.length >= 12) {
-        // Derive pepper deterministically from jwtSecret (dev-only). Do NOT rely on this in production.
-        this.PEPPER = createHash('sha256').update(`authrix-pepper:${jwt}`).digest('hex');
-        this.DEV_DERIVED = true;
-        // Minimal one-time warning
-        if (!process.env.AUTHRIX_SUPPRESS_DEV_PEPPER_WARNING) {
-          // eslint-disable-next-line no-console
-          console.warn('[Authrix] Using derived dev pepper from jwtSecret. Configure AUTHRIX_PASSWORD_PEPPER in production.');
-          process.env.AUTHRIX_SUPPRESS_DEV_PEPPER_WARNING = '1';
-        }
-      } else {
-        // Fallback to generated pepper (unstable across restarts) if jwtSecret is not initialized yet
-        this.PEPPER = this.generateDefaultPepper();
-        this.DEV_GENERATED = true;
-      }
-    }
-
-    // Validate configuration on startup
+    this.validateEnvironment();
+    
+    // Load configuration with production defaults
+    this.BCRYPT_ROUNDS = this.loadIntConfig('AUTHRIX_BCRYPT_ROUNDS', 14, 12, 20);
+    
+    // Argon2 settings optimized for production
+    this.ARGON2_TIME_COST = this.loadIntConfig('AUTHRIX_ARGON2_TIME_COST', 3, 2, 10);
+    this.ARGON2_MEMORY_COST = this.loadIntConfig('AUTHRIX_ARGON2_MEMORY_COST', 65536, 32768, 1048576);
+    this.ARGON2_PARALLELISM = this.loadIntConfig('AUTHRIX_ARGON2_PARALLELISM', 4, 1, 8);
+    
+    // Password policy
+    this.MIN_PASSWORD_LENGTH = this.loadIntConfig('AUTHRIX_MIN_PASSWORD_LENGTH', 12, 8, 128);
+    this.MIN_ENTROPY = this.loadIntConfig('AUTHRIX_MIN_ENTROPY', 50, 30, 100);
+    
+    // Performance settings
+    this.USE_WORKER_THREADS = process.env.AUTHRIX_USE_WORKERS === 'true';
+    this.MAX_CONCURRENT_OPERATIONS = this.loadIntConfig('AUTHRIX_MAX_CONCURRENT_OPS', 100, 10, 1000);
+    
+    // Monitoring
+    this.ENABLE_METRICS = process.env.AUTHRIX_ENABLE_METRICS !== 'false';
+    
+    // Load pepper securely
+    this.PEPPER = this.loadPepper();
+    this.PEPPER_ROTATION_KEY = process.env.AUTHRIX_PEPPER_ROTATION_KEY;
+    
     this.validateConfiguration();
   }
 
-  private validateBcryptRounds(rounds: number): number {
-    // Accept a wider range in non-strict mode to support downgrade / rehash tests
-    if (!isNaN(rounds)) {
-      if (this.STRICT_MODE) {
-        if (rounds >= 12 && rounds <= 20) return rounds;
-      } else {
-        if (rounds >= 6 && rounds <= 20) return rounds; // allow weaker rounds for legacy hashes & tests
-      }
+  private validateEnvironment(): void {
+    if (process.env.NODE_ENV !== 'production' && !process.env.AUTHRIX_ALLOW_NON_PRODUCTION) {
+      console.warn('[Security] Running in non-production mode. Set NODE_ENV=production for production use.');
     }
-    return 14; // Secure default
   }
 
-  private generateDefaultPepper(): string {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('Password pepper must be configured in production');
+  private loadIntConfig(key: string, defaultValue: number, min: number, max: number): number {
+    const value = parseInt(process.env[key] || '', 10);
+    if (isNaN(value)) return defaultValue;
+    if (value < min || value > max) {
+      throw new Error(`${key} must be between ${min} and ${max}`);
     }
-  // eslint-disable-next-line no-console
-  console.warn("[Authrix] Dev pepper generated; set AUTHRIX_PASSWORD_PEPPER or jwtSecret for stability.");
-    return randomBytes(32).toString("hex");
+    return value;
+  }
+
+  private loadPepper(): string {
+    const pepper = process.env.AUTHRIX_PASSWORD_PEPPER;
+    
+    if (!pepper) {
+      throw new Error('AUTHRIX_PASSWORD_PEPPER must be configured');
+    }
+    
+    if (pepper.length < 32) {
+      throw new Error('Password pepper must be at least 32 characters');
+    }
+    
+    // Validate pepper format (should be hex or base64)
+    if (!/^[a-fA-F0-9]{64,}$/.test(pepper) && !/^[A-Za-z0-9+/]+=*$/.test(pepper)) {
+      throw new Error('Password pepper must be a valid hex or base64 string');
+    }
+    
+    return pepper;
   }
 
   private validateConfiguration(): void {
-    if (this.STRICT_MODE && this.BCRYPT_ROUNDS < 12) {
-      throw new Error(
-        "Bcrypt rounds must be at least 12 for production security"
-      );
-    }
-    if (!this.PEPPER || this.PEPPER.length < 32) {
-      throw new Error("Password pepper must be at least 32 characters");
+    // Validate Argon2 memory doesn't exceed system limits
+  const totalMemory = os.totalmem();
+    const maxMemoryPerOperation = this.ARGON2_MEMORY_COST * 1024; // Convert KiB to bytes
+    const maxConcurrentMemory = maxMemoryPerOperation * this.MAX_CONCURRENT_OPERATIONS;
+    
+    if (maxConcurrentMemory > totalMemory * 0.5) {
+      console.warn('[Security] Argon2 memory settings may exhaust system memory under load');
     }
   }
 
   public getPepper(): string {
-    // If dev generated pepper was used but jwtSecret is now available, upgrade to derived pepper once
-  if (!authConfig?.authPepper && !process.env.AUTHRIX_PASSWORD_PEPPER && this.DEV_GENERATED) {
-      const jwt = (authConfig && typeof authConfig.jwtSecret === 'string') ? authConfig.jwtSecret : '';
-      if (jwt && jwt.length >= 12) {
-        // Preserve previous pepper to allow legacy hash verification then rehash
-        this.PREV_PEPPER = this.PEPPER;
-        this.PEPPER = createHash('sha256').update(`authrix-pepper:${jwt}`).digest('hex');
-        this.DEV_GENERATED = false;
-        this.DEV_DERIVED = true;
-        // eslint-disable-next-line no-console
-        console.info('[Authrix] Switched to derived dev pepper from jwtSecret.');
-      }
-    }
-    // If an explicit pepper has been configured after initial construction (e.g. initAuth ran later)
-    // and differs from current pepper, upgrade while preserving previous for fallback verification.
-    if (authConfig?.authPepper && this.PEPPER !== authConfig.authPepper) {
-      // Only perform upgrade once per change to avoid unbounded PREV_PEPPER churn.
-      if (this.PREV_PEPPER !== this.PEPPER) {
-        this.PREV_PEPPER = this.PEPPER;
-      }
-      this.PEPPER = authConfig.authPepper;
-    }
     return this.PEPPER;
   }
 
-  public getPreviousPepper(): string | undefined {
-    return this.PREV_PEPPER;
-  }
-
-  public getAllowPrevPepperFallback(): boolean {
-    return this.ALLOW_PREV_PEPPER_FALLBACK;
+  public getRotationPepper(): string | undefined {
+    return this.PEPPER_ROTATION_KEY;
   }
 }
 
+// ============================= Singleton Config Instance =============================
+
 const config = new SecurityConfig();
 
-// Rate Limiting
+// ============================= Metrics Collection =============================
 
-class RateLimiter {
-  private store = new Map<string, RateLimitEntry>();
-  private cleanupInterval: NodeJS.Timeout;
+class MetricsCollector {
+  private metrics: SecurityMetrics = {
+    totalHashOperations: 0,
+    totalVerifyOperations: 0,
+    failedVerifications: 0,
+    rateLimitBlocks: 0,
+    rehashesPerformed: 0,
+    averageHashTime: 0,
+    averageVerifyTime: 0,
+  };
 
-  constructor() {
-    // Periodic cleanup every 5 minutes
-    this.cleanupInterval = setInterval(() => this.cleanup(), 5 * 60 * 1000);
-    // Allow process to exit in test environments & reduce impact on memory tracking
-    if (this.cleanupInterval.unref) {
-      this.cleanupInterval.unref();
+  private hashTimes: number[] = [];
+  private verifyTimes: number[] = [];
+  private readonly maxSamples = 1000;
+
+  public recordHashOperation(duration: number): void {
+    this.metrics.totalHashOperations++;
+    this.hashTimes.push(duration);
+    if (this.hashTimes.length > this.maxSamples) {
+      this.hashTimes.shift();
+    }
+    this.updateAverages();
+  }
+
+  public recordVerifyOperation(duration: number, success: boolean): void {
+    this.metrics.totalVerifyOperations++;
+    if (!success) this.metrics.failedVerifications++;
+    this.verifyTimes.push(duration);
+    if (this.verifyTimes.length > this.maxSamples) {
+      this.verifyTimes.shift();
+    }
+    this.updateAverages();
+  }
+
+  public recordRateLimitBlock(): void {
+    this.metrics.rateLimitBlocks++;
+  }
+
+  public recordRehash(): void {
+    this.metrics.rehashesPerformed++;
+  }
+
+  private updateAverages(): void {
+    if (this.hashTimes.length > 0) {
+      this.metrics.averageHashTime = 
+        this.hashTimes.reduce((a, b) => a + b, 0) / this.hashTimes.length;
+    }
+    if (this.verifyTimes.length > 0) {
+      this.metrics.averageVerifyTime = 
+        this.verifyTimes.reduce((a, b) => a + b, 0) / this.verifyTimes.length;
     }
   }
 
-  public checkLimit(identifier: string): {
+  public getMetrics(): SecurityMetrics {
+    return { ...this.metrics };
+  }
+
+  public reset(): void {
+    this.metrics = {
+      totalHashOperations: 0,
+      totalVerifyOperations: 0,
+      failedVerifications: 0,
+      rateLimitBlocks: 0,
+      rehashesPerformed: 0,
+      averageHashTime: 0,
+      averageVerifyTime: 0,
+    };
+    this.hashTimes = [];
+    this.verifyTimes = [];
+  }
+}
+
+const metricsCollector = config.ENABLE_METRICS ? new MetricsCollector() : null;
+
+// ============================= Enhanced Rate Limiting =============================
+
+class EnhancedRateLimiter {
+  private store = new Map<string, RateLimitEntry>();
+  private cleanupInterval: NodeJS.Timeout;
+  private readonly maxStoreSize = 10000;
+  
+  constructor() {
+    this.cleanupInterval = setInterval(() => this.cleanup(), 60000);
+    this.cleanupInterval.unref();
+  }
+
+  public async checkLimit(identifier: string): Promise<{
     allowed: boolean;
     retryAfter?: number;
-  } {
+    delayMs?: number;
+  }> {
     const now = Date.now();
     const entry = this.store.get(identifier) || {
       attempts: [],
       blocked: false,
+      consecutiveFailures: 0,
     };
 
     // Check if currently blocked
     if (entry.blocked && entry.blockUntil && entry.blockUntil > now) {
+      metricsCollector?.recordRateLimitBlock();
+      securityEvents.emitSecurityEvent('rate_limit_blocked', { identifier });
       return {
         allowed: false,
         retryAfter: Math.ceil((entry.blockUntil - now) / 1000),
@@ -273,63 +310,103 @@ class RateLimiter {
     if (entry.blocked && entry.blockUntil && entry.blockUntil <= now) {
       entry.blocked = false;
       entry.blockUntil = undefined;
-      entry.attempts = [];
+      entry.consecutiveFailures = 0;
     }
 
-    // Filter recent attempts
+    // Filter attempts within the last minute
     entry.attempts = entry.attempts.filter(
-      (time) => now - time < config.RATE_LIMIT_WINDOW
+      (time) => now - time < 60000
     );
 
     // Check rate limits
     if (entry.attempts.length >= config.MAX_ATTEMPTS_PER_MINUTE) {
-      // Block the identifier
       entry.blocked = true;
-      entry.blockUntil = now + config.BLOCK_DURATION;
+      entry.blockUntil = now + config.BLOCK_DURATION * Math.min(entry.consecutiveFailures + 1, 5);
+      entry.consecutiveFailures++;
       this.store.set(identifier, entry);
+      
+      metricsCollector?.recordRateLimitBlock();
+      securityEvents.emitSecurityEvent('rate_limit_exceeded', { 
+        identifier, 
+        attempts: entry.attempts.length 
+      });
 
       return {
         allowed: false,
-        retryAfter: Math.ceil(config.BLOCK_DURATION / 1000),
+        retryAfter: Math.ceil((entry.blockUntil - now) / 1000),
       };
+    }
+
+    // Calculate progressive delay
+    let delayMs = 0;
+    if (config.PROGRESSIVE_DELAY_ENABLED && entry.attempts.length > 0) {
+      delayMs = Math.min(Math.pow(2, entry.attempts.length) * 100, 5000);
     }
 
     // Add current attempt
     entry.attempts.push(now);
     this.store.set(identifier, entry);
 
-    return { allowed: true };
+    // Implement progressive delay
+    if (delayMs > 0) {
+      await this.delay(delayMs);
+    }
+
+    return { allowed: true, delayMs };
+  }
+
+  private async delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private cleanup(): void {
     const now = Date.now();
-    for (const [key, entry] of this.store.entries()) {
-      // Remove entries with no recent activity
+    const entries = Array.from(this.store.entries());
+    
+    // Remove expired entries
+    for (const [key, entry] of entries) {
       const hasRecentActivity = entry.attempts.some(
-        (time) => now - time < config.RATE_LIMIT_WINDOW * 2
+        (time) => now - time < 120000 // 2 minutes
       );
-      const isBlocked =
-        entry.blocked && entry.blockUntil && entry.blockUntil > now;
-
+      const isBlocked = entry.blocked && entry.blockUntil && entry.blockUntil > now;
+      
       if (!hasRecentActivity && !isBlocked) {
         this.store.delete(key);
       }
     }
 
-    // Prevent memory leak
-    if (this.store.size > 10000) {
-      const entries = Array.from(this.store.entries());
-      entries.sort((a, b) => {
+    // Prevent memory exhaustion
+    if (this.store.size > this.maxStoreSize) {
+      const sortedEntries = entries.sort((a, b) => {
         const aLast = Math.max(...a[1].attempts, 0);
         const bLast = Math.max(...b[1].attempts, 0);
         return aLast - bLast;
       });
 
-      // Keep only the most recent 5000 entries
       this.store.clear();
-      entries
-        .slice(-5000)
+      sortedEntries
+        .slice(-Math.floor(this.maxStoreSize / 2))
         .forEach(([key, value]) => this.store.set(key, value));
+        
+      securityEvents.emitSecurityEvent('rate_limit_cleanup', { 
+        removed: sortedEntries.length - Math.floor(this.maxStoreSize / 2) 
+      });
+    }
+  }
+
+  public recordFailure(identifier: string): void {
+    const entry = this.store.get(identifier);
+    if (entry) {
+      entry.consecutiveFailures++;
+      this.store.set(identifier, entry);
+    }
+  }
+
+  public clearFailures(identifier: string): void {
+    const entry = this.store.get(identifier);
+    if (entry) {
+      entry.consecutiveFailures = 0;
+      this.store.set(identifier, entry);
     }
   }
 
@@ -337,36 +414,27 @@ class RateLimiter {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
     }
+    this.store.clear();
   }
 }
 
-const rateLimiter = new RateLimiter();
+const rateLimiter = new EnhancedRateLimiter();
 
 // ============================= Password Validation =============================
 
 class PasswordValidator {
   private static readonly COMMON_PASSWORDS = new Set([
-    "password",
-    "123456",
-    "password123",
-    "admin",
-    "letmein",
-    "welcome",
-    "monkey",
-    "1234567890",
-    "qwerty",
-    "abc123",
-    "Password1",
-    "password1",
+    // Extended list - in production, load from a file or database
+    "password", "123456", "password123", "admin", "letmein", 
+    "welcome", "monkey", "1234567890", "qwerty", "abc123",
+    "Password1", "password1", "123456789", "welcome123",
+    "admin123", "root", "toor", "pass", "p@ssw0rd", "passw0rd"
   ]);
 
   private static readonly KEYBOARD_PATTERNS = [
-    /qwerty/i,
-    /asdfgh/i,
-    /zxcvbn/i,
-    /qwertyuiop/i,
-    /\d{6,}/, // 6+ consecutive digits
-    /(.)\1{5,}/, // 6+ repeated characters (stricter to reduce false positives)
+    /qwerty/i, /asdfgh/i, /zxcvbn/i, /qwertyuiop/i,
+    /\d{4,}/, // 4+ consecutive digits
+    /(.)\1{3,}/, // 4+ repeated characters
   ];
 
   public validate(
@@ -385,367 +453,407 @@ class PasswordValidator {
       minEntropy: config.MIN_ENTROPY,
       preventCommonPasswords: true,
       preventUserInfo: true,
+      preventSequentialPatterns: true,
+      maxConsecutiveCharacters: 3,
     };
 
     const finalPolicy = { ...defaultPolicy, ...policy };
+    const metadata = {
+      hasCompromisedPatterns: false,
+      characterDiversity: 0,
+      sequentialCharacters: 0,
+    };
 
-    // Length validation
-    if (!password || password.length < finalPolicy.minLength) {
-      errors.push(
-        `Password must be at least ${finalPolicy.minLength} characters`
-      );
+    // Input validation
+    if (!password || typeof password !== 'string') {
+      errors.push('Password must be a non-empty string');
+      return { isValid: false, errors, strength: 0, entropy: 0, metadata };
     }
 
+    // Length validation
+    if (password.length < finalPolicy.minLength) {
+      errors.push(`Password must be at least ${finalPolicy.minLength} characters`);
+    }
     if (password.length > finalPolicy.maxLength) {
-      errors.push(
-        `Password must not exceed ${finalPolicy.maxLength} characters`
-      );
+      errors.push(`Password must not exceed ${finalPolicy.maxLength} characters`);
     }
 
     // Character requirements
-    if (finalPolicy.requireLowercase && !/[a-z]/.test(password)) {
-      errors.push("Password must contain lowercase letters");
+    const hasLower = /[a-z]/.test(password);
+    const hasUpper = /[A-Z]/.test(password);
+    const hasNumber = /\d/.test(password);
+    const hasSymbol = /[!@#$%^&*()_+\-=```math```{};':"\\|,.<>\/?`~]/.test(password);
+
+    if (finalPolicy.requireLowercase && !hasLower) {
+      errors.push('Password must contain lowercase letters');
+    }
+    if (finalPolicy.requireUppercase && !hasUpper) {
+      errors.push('Password must contain uppercase letters');
+    }
+    if (finalPolicy.requireNumbers && !hasNumber) {
+      errors.push('Password must contain numbers');
+    }
+    if (finalPolicy.requireSymbols && !hasSymbol) {
+      errors.push('Password must contain special characters');
     }
 
-    if (finalPolicy.requireUppercase && !/[A-Z]/.test(password)) {
-      errors.push("Password must contain uppercase letters");
-    }
-
-    if (finalPolicy.requireNumbers && !/\d/.test(password)) {
-      errors.push("Password must contain numbers");
-    }
-
-    if (
-      finalPolicy.requireSymbols &&
-      !/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(password)
-    ) {
-      errors.push("Password must contain special characters");
-    }
+    // Calculate character diversity
+    metadata.characterDiversity = [hasLower, hasUpper, hasNumber, hasSymbol].filter(Boolean).length;
 
     // Entropy calculation
     const entropy = this.calculateEntropy(password);
     if (entropy < finalPolicy.minEntropy) {
-      // Allow slight tolerance when not strict mode: only error if entropy < (minEntropy - 5)
-      const tolerance = config.STRICT_MODE ? 0 : 5;
-      if (entropy < finalPolicy.minEntropy - tolerance) {
-        errors.push(
-          `Password is too predictable (entropy: ${entropy.toFixed(1)} bits, required: ${finalPolicy.minEntropy})`
-        );
-      }
+      errors.push(
+        `Password is too weak (entropy: ${entropy.toFixed(1)} bits, required: ${finalPolicy.minEntropy})`
+      );
     }
 
-    // Pattern & sequence detection
-    let patternFlagged = false;
-    for (const pattern of PasswordValidator.KEYBOARD_PATTERNS) {
-      if (pattern.test(password)) {
-        if (this.shouldFlagPattern(password)) {
-          errors.push("Password contains predictable patterns");
-        }
-        patternFlagged = true;
-        break;
+    // Pattern detection
+    if (finalPolicy.preventSequentialPatterns) {
+      const sequentialResult = this.detectSequentialPatterns(password, finalPolicy.maxConsecutiveCharacters);
+      if (sequentialResult.hasPatterns) {
+        errors.push('Password contains predictable patterns');
+        metadata.hasCompromisedPatterns = true;
+        metadata.sequentialCharacters = sequentialResult.maxSequence;
       }
-    }
-    if (!patternFlagged && this.hasSequentialRun(password) && this.shouldFlagPattern(password)) {
-      errors.push("Password contains predictable patterns");
     }
 
     // Common password check
-    if (finalPolicy.preventCommonPasswords) {
-      const lowerPassword = password.toLowerCase();
-      if (PasswordValidator.COMMON_PASSWORDS.has(lowerPassword)) {
-        errors.push("Password is too common");
-      }
+    if (finalPolicy.preventCommonPasswords && this.isCommonPassword(password)) {
+      errors.push('Password is too common');
+      metadata.hasCompromisedPatterns = true;
     }
 
     // User info check
     if (finalPolicy.preventUserInfo && userInfo && userInfo.length > 0) {
-      const lowerPassword = password.toLowerCase();
-      for (const info of userInfo) {
-        if (info && lowerPassword.includes(info.toLowerCase())) {
-          errors.push("Password must not contain personal information");
-          break;
-        }
+      if (this.containsUserInfo(password, userInfo)) {
+        errors.push('Password must not contain personal information');
       }
     }
 
-    // Calculate password strength (0-100)
-    const strength = this.calculateStrength(password, entropy, errors.length);
+    // Calculate strength
+    const strength = this.calculateStrength(password, entropy, errors.length, metadata);
 
-    const result = {
+    return {
       isValid: errors.length === 0,
       errors,
       strength,
       entropy,
+      metadata,
     };
-    if (process.env.AUTHRIX_DEBUG_PASSWORDS && !result.isValid) {
-      // Minimal debug output for development
-      // eslint-disable-next-line no-console
-      console.debug('[AUTHRIX][PW-DEBUG]', { password, errors, entropy, strength, policy: finalPolicy });
-    }
-    return result;
   }
 
   private calculateEntropy(password: string): number {
     if (!password) return 0;
 
-    const repeatedCharMatch = password.match(/^(.)\1+$/);
     const charsets = {
       lowercase: 26,
       uppercase: 26,
       numbers: 10,
       symbols: 32,
-      extended: 128,
+      unicode: 65536,
     };
 
     let poolSize = 0;
     if (/[a-z]/.test(password)) poolSize += charsets.lowercase;
     if (/[A-Z]/.test(password)) poolSize += charsets.uppercase;
     if (/\d/.test(password)) poolSize += charsets.numbers;
-  if (/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(password)) poolSize += charsets.symbols;
-    if (/[^\x00-\x7F]/.test(password)) poolSize += charsets.extended;
+    if (/[!@#$%^&*()_+\-=```math```{};':"\\|,.<>\/?`~]/.test(password)) poolSize += charsets.symbols;
+    if (/[^\x00-\x7F]/.test(password)) poolSize += charsets.unicode;
 
     if (poolSize === 0) return 0;
 
-    // If password is a single repeated character, entropy is minimal (one choice repeated)
-    if (repeatedCharMatch) {
-      return Math.log2(poolSize); // Equivalent to one random draw from pool
+    // Check for repeated patterns
+    const uniqueChars = new Set(password).size;
+    const repetitionPenalty = uniqueChars / password.length;
+
+    return password.length * Math.log2(poolSize) * repetitionPenalty;
+  }
+
+  private detectSequentialPatterns(password: string, maxConsecutive: number): {
+    hasPatterns: boolean;
+    maxSequence: number;
+  } {
+    let maxSequence = 0;
+    let currentSequence = 1;
+
+    // Check for keyboard patterns
+    for (const pattern of PasswordValidator.KEYBOARD_PATTERNS) {
+      if (pattern.test(password)) {
+        return { hasPatterns: true, maxSequence: password.length };
+      }
     }
 
-    return password.length * Math.log2(poolSize);
+    // Check for sequential characters
+    for (let i = 1; i < password.length; i++) {
+      const prevCode = password.charCodeAt(i - 1);
+      const currCode = password.charCodeAt(i);
+      
+      if (Math.abs(currCode - prevCode) === 1) {
+        currentSequence++;
+        maxSequence = Math.max(maxSequence, currentSequence);
+      } else {
+        currentSequence = 1;
+      }
+    }
+
+    // Check for repeated characters
+    const repeatedMatch = password.match(/(.)\1+/g);
+    if (repeatedMatch) {
+      for (const match of repeatedMatch) {
+        maxSequence = Math.max(maxSequence, match.length);
+      }
+    }
+
+    return {
+      hasPatterns: maxSequence > maxConsecutive,
+      maxSequence,
+    };
+  }
+
+  private isCommonPassword(password: string): boolean {
+    const normalized = password.toLowerCase();
+    
+    // Check exact match
+    if (PasswordValidator.COMMON_PASSWORDS.has(normalized)) {
+      return true;
+    }
+
+    // Check variants (with common substitutions)
+    const commonSubstitutions = normalized
+      .replace(/[@]/g, 'a')
+      .replace(/[0]/g, 'o')
+      .replace(/[1!]/g, 'i')
+      .replace(/[3]/g, 'e')
+      .replace(/[$5]/g, 's');
+
+    return PasswordValidator.COMMON_PASSWORDS.has(commonSubstitutions);
+  }
+
+  private containsUserInfo(password: string, userInfo: string[]): boolean {
+    const normalized = password.toLowerCase();
+    return userInfo.some(info => {
+      if (!info || info.length < 3) return false;
+      return normalized.includes(info.toLowerCase());
+    });
   }
 
   private calculateStrength(
     password: string,
     entropy: number,
-    errorCount: number
+    errorCount: number,
+    metadata: PasswordValidationResult['metadata']
   ): number {
-  let strength = Math.min(100, (entropy / 100) * 100);
+    let strength = Math.min(100, (entropy / 128) * 100);
 
-    // Bonus for length
-    if (password.length > 16) strength += 10;
-    if (password.length > 20) strength += 10;
+    // Bonuses
+    if (password.length > 16) strength += 5;
+    if (password.length > 24) strength += 5;
+    if (metadata?.characterDiversity === 4) strength += 10;
 
-    // Penalty for errors
-  strength -= errorCount * 15;
-
-  // Additional penalty for very low entropy or repeated single-char passwords
-  if (entropy < 5) strength = Math.min(strength, 5);
-
-    // Bonus for character variety
-    const varietyScore = this.getCharacterVariety(password);
-    strength += varietyScore * 5;
+    // Penalties
+    strength -= errorCount * 15;
+    if (metadata?.hasCompromisedPatterns) strength -= 20;
+    if (metadata?.sequentialCharacters && metadata.sequentialCharacters > 3) {
+      strength -= metadata.sequentialCharacters * 2;
+    }
 
     return Math.max(0, Math.min(100, Math.round(strength)));
-  }
-
-  private getCharacterVariety(password: string): number {
-    const types = [
-      /[a-z]/,
-      /[A-Z]/,
-      /\d/,
-  /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/,
-      /[^\x00-\x7F]/,
-    ];
-
-    return types.filter((regex) => regex.test(password)).length;
-  }
-
-  // Detect ascending or descending alpha/numeric sequences length >= 6
-  private hasSequentialRun(password: string): boolean {
-    if (!password || password.length < 6) return false;
-    const normalized = password;
-    let ascRun = 1;
-    let descRun = 1;
-    for (let i = 1; i < normalized.length; i++) {
-      const prev = normalized.charCodeAt(i - 1);
-      const curr = normalized.charCodeAt(i);
-      if (curr === prev + 1) {
-        ascRun += 1;
-        descRun = 1;
-      } else if (curr === prev - 1) {
-        descRun += 1;
-        ascRun = 1;
-      } else {
-        ascRun = 1;
-        descRun = 1;
-      }
-      if (ascRun >= 6 || descRun >= 6) return true;
-    }
-    return false;
-  }
-
-  private shouldFlagPattern(password: string): boolean {
-    const entropy = this.calculateEntropy(password);
-    const hasLower = /[a-z]/.test(password);
-    const hasUpper = /[A-Z]/.test(password);
-    const hasNum = /\d/.test(password);
-    const hasSym = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(password);
-    const variety = [hasLower, hasUpper, hasNum, hasSym].filter(Boolean).length;
-    if (!config.STRICT_MODE && variety >= 3 && entropy >= (config.MIN_ENTROPY + 20)) {
-      return false; // treat as strong enough; avoid incidental pattern flag
-    }
-    return true;
   }
 }
 
 const validator = new PasswordValidator();
 
-// ============================= Password Hashing =============================
+// ============================= Password Hashing with Worker Thread Support =============================
 
 class PasswordHasher {
-  private argon2HashCount = 0;
-  /**
-   * Hash a password using the specified algorithm
-   */
-  public async hash(
-    password: string,
-    options: HashOptions = {}
-  ): Promise<string> {
-    // Input validation
-    if (typeof password !== "string") {
-      throw new TypeError("Password must be a string");
-    }
+  private readonly concurrencyLimiter: ConcurrencyLimiter;
+  private workerPool?: WorkerPool;
 
-    // Rate limiting
-    if (options.identifier) {
-      const { allowed, retryAfter } = rateLimiter.checkLimit(
-        options.identifier
-      );
-      if (!allowed) {
-        throw new Error(
-          `Rate limit exceeded. Retry after ${retryAfter} seconds`
-        );
-      }
-    }
-
-    // Password validation
-    if (!options.skipValidation) {
-      const validation = validator.validate(password);
-      if (!validation.isValid) {
-        throw new Error(`Invalid password: ${validation.errors[0]}`);
-      }
-    }
-
-    // Apply pepper if configured
-    const pepperedPassword = this.applyPepper(
-      password,
-      options.pepper || config.getPepper()
-    );
-
-    try {
-      const isTestEnv = !!process.env.JEST_WORKER_ID || process.env.NODE_ENV === 'test';
-      const lowMemoryMode = isTestEnv && !config.STRICT_MODE;
-      let algorithm = options.algorithm || "argon2id";
-
-      // After a number of Argon2 hashes in test mode, switch to bcrypt to keep heap lower for memory test
-  if (lowMemoryMode && this.argon2HashCount >= 4 && !options.algorithm) {
-        algorithm = "bcrypt";
-      }
-
-      if (algorithm === "argon2id") {
-        this.argon2HashCount += 1;
-        return await this.hashWithArgon2(pepperedPassword);
-      } else {
-        return await this.hashWithBcrypt(pepperedPassword);
-      }
-    } finally {
-      // Attempt to clear sensitive data
-      this.clearString(password);
-      this.clearString(pepperedPassword);
+  constructor() {
+    this.concurrencyLimiter = new ConcurrencyLimiter(config.MAX_CONCURRENT_OPERATIONS);
+    
+    if (config.USE_WORKER_THREADS) {
+      this.workerPool = new WorkerPool();
     }
   }
 
-  /**
-   * Verify a password against a hash
-   */
+  public async hash(password: string, options: HashOptions = {}): Promise<string> {
+    const startTime = Date.now();
+
+    try {
+      // Input validation
+      if (typeof password !== 'string' || !password) {
+        throw new TypeError('Password must be a non-empty string');
+      }
+
+      // Rate limiting
+      if (options.identifier) {
+        const { allowed, retryAfter } = await rateLimiter.checkLimit(options.identifier);
+        if (!allowed) {
+          securityEvents.emitSecurityEvent('hash_rate_limited', { identifier: options.identifier });
+          throw new Error(`Rate limit exceeded. Retry after ${retryAfter} seconds`);
+        }
+      }
+
+      // Password validation
+      if (!options.skipValidation) {
+        const validation = validator.validate(password);
+        if (!validation.isValid) {
+          securityEvents.emitSecurityEvent('hash_validation_failed', { 
+            errors: validation.errors 
+          });
+          throw new Error(`Invalid password: ${validation.errors.join(', ')}`);
+        }
+      }
+
+      // Apply pepper
+      const pepper = options.pepper || config.getPepper();
+      const pepperedPassword = this.applyPepper(password, pepper);
+
+      // Hash with concurrency control
+      const hash = await this.concurrencyLimiter.execute(async () => {
+        const algorithm = options.algorithm || 'argon2id';
+        
+        if (config.USE_WORKER_THREADS && this.workerPool) {
+          return await this.workerPool.hash(pepperedPassword, algorithm);
+        }
+
+        if (algorithm === 'argon2id') {
+          return await this.hashWithArgon2(pepperedPassword);
+        } else {
+          return await this.hashWithBcrypt(pepperedPassword);
+        }
+      });
+
+      metricsCollector?.recordHashOperation(Date.now() - startTime);
+      return hash;
+
+    } catch (error) {
+      securityEvents.emitSecurityEvent('hash_error', { 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      });
+      throw error;
+    }
+  }
+
   public async verify(
     password: string,
     hash: string,
     options: VerifyOptions = {}
   ): Promise<{ valid: boolean; needsRehash: boolean }> {
-    // Input validation
-    if (typeof password !== "string" || typeof hash !== "string") {
-      return { valid: false, needsRehash: false };
-    }
-
-    if (!password || !hash) {
-      // Perform dummy operation to prevent timing attacks
-      await this.dummyVerify();
-      return { valid: false, needsRehash: false };
-    }
-
-    // Rate limiting
-    if (options.identifier) {
-      const { allowed, retryAfter } = rateLimiter.checkLimit(
-        options.identifier
-      );
-      if (!allowed) {
-        throw new Error(
-          `Rate limit exceeded. Retry after ${retryAfter} seconds`
-        );
-      }
-    }
+    const startTime = Date.now();
 
     try {
-      // Apply pepper (current)
-      const currentPepper = config.getPepper();
-      const pepperedPassword = this.applyPepper(password, currentPepper);
+      // Input validation
+      if (typeof password !== 'string' || typeof hash !== 'string') {
+        return { valid: false, needsRehash: false };
+      }
 
+      if (!password || !hash) {
+        await this.dummyVerify();
+        return { valid: false, needsRehash: false };
+      }
+
+      // Rate limiting
+      if (options.identifier && !options.skipRateLimit) {
+        const { allowed, retryAfter } = await rateLimiter.checkLimit(options.identifier);
+        if (!allowed) {
+          securityEvents.emitSecurityEvent('verify_rate_limited', { 
+            identifier: options.identifier 
+          });
+          throw new Error(`Rate limit exceeded. Retry after ${retryAfter} seconds`);
+        }
+      }
+
+      // Apply pepper and verify
+      const pepper = config.getPepper();
+      const pepperedPassword = this.applyPepper(password, pepper);
+      
       let valid = false;
       let needsRehash = false;
 
-      const tryVerify = async (peppered: string) => {
-        if (hash.startsWith("$argon2")) {
-          const ok = await argon2.verify(hash, peppered);
-          return { ok, rehash: this.needsArgon2Rehash(hash) };
-        } else if (hash.startsWith("$2")) {
-          const ok = await bcrypt.compare(peppered, hash);
-          return { ok, rehash: this.needsBcryptRehash(hash) };
+      const result = await this.concurrencyLimiter.execute(async () => {
+        if (hash.startsWith('$argon2')) {
+          const isValid = await argon2.verify(hash, pepperedPassword);
+          return { 
+            valid: isValid, 
+            needsRehash: isValid && this.needsArgon2Rehash(hash) 
+          };
+        } else if (hash.startsWith('$2')) {
+          const isValid = await bcrypt.compare(pepperedPassword, hash);
+          return { 
+            valid: isValid, 
+            needsRehash: isValid && this.needsBcryptRehash(hash) 
+          };
         } else {
           await this.dummyVerify();
-          return { ok: false, rehash: true };
+          return { valid: false, needsRehash: false };
         }
-      };
+      });
 
-      // First attempt with current pepper
-      const first = await tryVerify(pepperedPassword);
-      valid = first.ok;
-      needsRehash = first.rehash;
+      valid = result.valid;
+      needsRehash = result.needsRehash;
 
-      // If invalid, but we have a previous pepper (dev switch), try once more and flag rehash
-      if (!valid) {
-        const prev = config.getPreviousPepper?.();
-        if (prev && config.getAllowPrevPepperFallback()) {
-          const second = await tryVerify(this.applyPepper(password, prev));
-          if (second.ok) {
-            valid = true;
-            // Force rehash to migrate to current pepper
-            needsRehash = true;
+      // Try with rotation pepper if configured and initial verification failed
+      if (!valid && config.getRotationPepper()) {
+        const rotationPepper = config.getRotationPepper()!;
+        const rotationPepperedPassword = this.applyPepper(password, rotationPepper);
+        
+        const rotationResult = await this.concurrencyLimiter.execute(async () => {
+          if (hash.startsWith('$argon2')) {
+            return await argon2.verify(hash, rotationPepperedPassword);
+          } else if (hash.startsWith('$2')) {
+            return await bcrypt.compare(rotationPepperedPassword, hash);
           }
+          return false;
+        });
+
+        if (rotationResult) {
+          valid = true;
+          needsRehash = true; // Force rehash to update pepper
+          securityEvents.emitSecurityEvent('pepper_rotation_used', { 
+            identifier: options.identifier 
+          });
         }
       }
 
+      // Update rate limiter based on result
+      if (options.identifier) {
+        if (valid) {
+          rateLimiter.clearFailures(options.identifier);
+        } else {
+          rateLimiter.recordFailure(options.identifier);
+        }
+      }
+
+      metricsCollector?.recordVerifyOperation(Date.now() - startTime, valid);
+      
+      if (!valid) {
+        securityEvents.emitSecurityEvent('verify_failed', { 
+          identifier: options.identifier 
+        });
+      }
+
       return { valid, needsRehash };
+
     } catch (error) {
-      // Log error securely without exposing sensitive information
-      console.error(
-        "Password verification error:",
-        error instanceof Error ? error.message : "Unknown error"
-      );
+      securityEvents.emitSecurityEvent('verify_error', { 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      });
       await this.dummyVerify();
       return { valid: false, needsRehash: false };
-    } finally {
-      this.clearString(password);
     }
   }
 
   private async hashWithArgon2(password: string): Promise<string> {
-    return withHashSlot(() => argon2.hash(password, {
+    return argon2.hash(password, {
       type: argon2.argon2id,
       timeCost: config.ARGON2_TIME_COST,
       memoryCost: config.ARGON2_MEMORY_COST,
       parallelism: config.ARGON2_PARALLELISM,
-    }));
+      salt: randomBytes(config.ARGON2_SALT_LENGTH),
+    });
   }
 
   private async hashWithBcrypt(password: string): Promise<string> {
@@ -754,109 +862,240 @@ class PasswordHasher {
 
   private applyPepper(password: string, pepper: string): string {
     if (!pepper) return password;
-
-    // Use HMAC to apply pepper
-    const hmac = createHash("sha256");
-    hmac.update(password + pepper);
-    return hmac.digest("base64");
+    
+    // Use HMAC-SHA256 for pepper application
+    const hmac = createHmac('sha256', pepper);
+    hmac.update(password);
+    return hmac.digest('base64');
   }
 
   private async dummyVerify(): Promise<void> {
-    const isTestEnv = !!process.env.JEST_WORKER_ID || process.env.NODE_ENV === 'test';
-    if (isTestEnv && !config.STRICT_MODE) {
-      // Use lightweight bcrypt compare in test to avoid large Argon2 allocations impacting heap measurement
-      const dummy = await bcrypt.hash("dummy", 6);
-      await bcrypt.compare("dummy", dummy);
-      return;
+    // Constant-time dummy operation to prevent timing attacks
+    const dummyHash = '$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG';
+    try {
+      await argon2.verify(dummyHash, 'dummy');
+    } catch {
+      // Expected to fail
     }
-    // Production / strict mode: retain strong Argon2 timing equivalent
-    const dummyHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG";
-    try { await argon2.verify(dummyHash, "dummy"); } catch { /* ignore */ }
   }
 
   private needsBcryptRehash(hash: string): boolean {
-    try {
-      const match = hash.match(/^\$2[aby]?\$(\d+)\$/);
-      if (!match) return true;
-
-      const rounds = parseInt(match[1], 10);
-      return rounds < config.BCRYPT_ROUNDS;
-    } catch {
-      return true;
-    }
+    const match = hash.match(/^\$2[aby]?\$(\d+)\$/);
+    if (!match) return true;
+    const rounds = parseInt(match[1], 10);
+    return rounds < config.BCRYPT_ROUNDS;
   }
 
   private needsArgon2Rehash(hash: string): boolean {
+    const match = hash.match(/m=(\d+),t=(\d+),p=(\d+)/);
+    if (!match) return true;
+
+    const memoryCost = parseInt(match[1], 10);
+    const timeCost = parseInt(match[2], 10);
+    const parallelism = parseInt(match[3], 10);
+
+    return (
+      memoryCost < config.ARGON2_MEMORY_COST ||
+      timeCost < config.ARGON2_TIME_COST ||
+      parallelism < config.ARGON2_PARALLELISM
+    );
+  }
+
+  public destroy(): void {
+    this.workerPool?.destroy();
+  }
+}
+
+// ============================= Concurrency Limiter =============================
+
+class ConcurrencyLimiter {
+  private running = 0;
+  private queue: Array<{
+    resolve: (value: any) => void;
+    reject: (error: any) => void;
+    fn: () => Promise<any>;
+  }> = [];
+
+  constructor(private maxConcurrent: number) {}
+
+  public async execute<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.running >= this.maxConcurrent) {
+      return new Promise<T>((resolve, reject) => {
+        this.queue.push({ resolve, reject, fn });
+      });
+    }
+
+    this.running++;
     try {
-      // Parse Argon2 parameters
-      const match = hash.match(/m=(\d+),t=(\d+),p=(\d+)/);
-      if (!match) return true;
-
-      const memoryCost = parseInt(match[1], 10);
-      const timeCost = parseInt(match[2], 10);
-      const parallelism = parseInt(match[3], 10);
-
-      return (
-        memoryCost < config.ARGON2_MEMORY_COST ||
-        timeCost < config.ARGON2_TIME_COST ||
-        parallelism < config.ARGON2_PARALLELISM
-      );
-    } catch {
-      return true;
+      const result = await fn();
+      this.processQueue();
+      return result;
+    } finally {
+      this.running--;
     }
   }
 
-  private clearString(str: string): void {
-    // Best effort to clear string from memory
-    // Note: This is not guaranteed in JavaScript
-    if (typeof str === "string" && str.length > 0) {
-      try {
-        // Overwrite with random data
-        const buffer = Buffer.from(str);
-        randomBytes(buffer.length).copy(buffer);
-      } catch {
-        // Ignore errors in cleanup
+  private async processQueue(): Promise<void> {
+    if (this.queue.length === 0 || this.running >= this.maxConcurrent) {
+      return;
+    }
+
+    const item = this.queue.shift();
+    if (!item) return;
+
+    this.running++;
+    try {
+      const result = await item.fn();
+      item.resolve(result);
+    } catch (error) {
+      item.reject(error);
+    } finally {
+      this.running--;
+      this.processQueue();
+    }
+  }
+}
+
+// ============================= Worker Pool for CPU-intensive operations =============================
+
+class WorkerPool {
+  private workers: Worker[] = [];
+  private available: Worker[] = [];
+  private pending: Array<{ resolve: (v: any) => void; reject: (e: any) => void; payload: any; type: 'hash' | 'verify'; }> = [];
+  private inflight = new Map<string, { resolve: (v: any) => void; reject: (e: any) => void; timer: NodeJS.Timeout }>();
+  private destroyed = false;
+  private idSeq = 0;
+  private readonly timeoutMs = 30000;
+
+  constructor(size: number = Math.min(8, Math.max(2, (os.cpus()?.length || 4)))) {
+    for (let i = 0; i < size; i++) this.spawn();
+  }
+
+  private workerScriptUrl(): URL {
+    return new URL('./passwordWorker.js', import.meta.url);
+  }
+
+  private spawn() {
+    if (this.destroyed) return;
+    try {
+  const worker = new Worker(this.workerScriptUrl());
+      worker.on('message', (msg: any) => this.handleMessage(worker, msg));
+      worker.on('error', err => {
+        securityEvents.emitSecurityEvent('worker_error', { error: err.message });
+        this.replace(worker);
+      });
+      worker.on('exit', code => {
+        if (!this.destroyed && code !== 0) {
+          securityEvents.emitSecurityEvent('worker_exit', { code });
+          this.replace(worker);
+        }
+      });
+      this.workers.push(worker);
+      this.available.push(worker);
+      this.drain();
+    } catch (e) {
+      securityEvents.emitSecurityEvent('worker_spawn_failed', { error: e instanceof Error ? e.message : String(e) });
+      this.destroyed = true;
+    }
+  }
+
+  private replace(w: Worker) {
+    const idx = this.workers.indexOf(w);
+    if (idx >= 0) this.workers.splice(idx, 1);
+    const aIdx = this.available.indexOf(w);
+    if (aIdx >= 0) this.available.splice(aIdx, 1);
+    if (!this.destroyed) this.spawn();
+  }
+
+  private handleMessage(worker: Worker, msg: any) {
+    const inflight = this.inflight.get(msg.id);
+    if (!inflight) return;
+    clearTimeout(inflight.timer);
+    this.inflight.delete(msg.id);
+    if (msg.success) inflight.resolve(msg.result); else inflight.reject(new Error(msg.error || 'Worker task failed'));
+    this.available.push(worker);
+    this.drain();
+  }
+
+  private dispatch(worker: Worker, payload: any, type: 'hash' | 'verify'): Promise<any> {
+    const id = `w${Date.now()}_${this.idSeq++}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.inflight.delete(id);
+        reject(new Error('Worker timeout'));
+        this.replace(worker);
+      }, this.timeoutMs);
+      this.inflight.set(id, { resolve, reject, timer });
+      worker.postMessage({ id, ...payload, type });
+    });
+  }
+
+  private drain() {
+    while (this.available.length && this.pending.length) {
+      const worker = this.available.shift()!;
+      const task = this.pending.shift()!;
+      this.dispatch(worker, task.payload, task.type).then(task.resolve).catch(task.reject);
+    }
+  }
+
+  public async hash(password: string, algorithm: 'argon2id' | 'bcrypt'): Promise<string> {
+    if (this.destroyed || !this.workers.length) {
+      // Fallback to in-process hashing
+      if (algorithm === 'argon2id') {
+        return argon2.hash(password, { type: argon2.argon2id, timeCost: config.ARGON2_TIME_COST, memoryCost: config.ARGON2_MEMORY_COST, parallelism: config.ARGON2_PARALLELISM, salt: randomBytes(config.ARGON2_SALT_LENGTH) });
       }
+      return bcrypt.hash(password, config.BCRYPT_ROUNDS);
     }
+    return new Promise<string>((resolve, reject) => {
+      this.pending.push({ resolve, reject, type: 'hash', payload: {
+        algorithm,
+        password,
+        options: {
+          bcryptRounds: config.BCRYPT_ROUNDS,
+          argon2Options: { timeCost: config.ARGON2_TIME_COST, memoryCost: config.ARGON2_MEMORY_COST, parallelism: config.ARGON2_PARALLELISM, saltLength: config.ARGON2_SALT_LENGTH }
+        }
+      }});
+      this.drain();
+    });
+  }
+
+  public async verify(password: string, hash: string): Promise<boolean> {
+    if (this.destroyed || !this.workers.length) {
+      if (hash.startsWith('$argon2')) return argon2.verify(hash, password);
+      if (hash.startsWith('$2')) return bcrypt.compare(password, hash);
+      return false;
+    }
+    return new Promise<boolean>((resolve, reject) => {
+      this.pending.push({ resolve, reject, type: 'verify', payload: { password, hash } });
+      this.drain();
+    });
+  }
+
+  public destroy() {
+    this.destroyed = true;
+    for (const w of this.workers) {
+      try { w.terminate(); } catch {}
+    }
+    this.workers = [];
+    this.available = [];
+    for (const [, inflight] of this.inflight) {
+      clearTimeout(inflight.timer);
+      inflight.reject(new Error('WorkerPool destroyed'));
+    }
+    this.inflight.clear();
+    this.pending.length = 0;
   }
 }
 
-const hasher = new PasswordHasher();
-
-// ============================= Concurrency Control (Test Optimization) =============================
-// Limit concurrent Argon2 hashes in test/non-strict environments to reduce peak heap usage
-const isTestEnvGlobal = !!process.env.JEST_WORKER_ID || process.env.NODE_ENV === 'test';
-const MAX_CONCURRENT_HASHES = (config.STRICT_MODE || !isTestEnvGlobal) ? Infinity : 2;
-let activeHashes = 0;
-const pendingResolvers: Array<() => void> = [];
-
-async function withHashSlot<T>(fn: () => Promise<T>): Promise<T> {
-  if (activeHashes >= MAX_CONCURRENT_HASHES) {
-    await new Promise<void>(resolve => pendingResolvers.push(resolve));
-  }
-  activeHashes += 1;
-  try {
-    return await fn();
-  } finally {
-    activeHashes -= 1;
-    const next = pendingResolvers.shift();
-    if (next) next();
-  }
-}
-
-// ============================= Password Generation =============================
+// ============================= Secure Password Generator =============================
 
 class SecurePasswordGenerator {
   private readonly charsets = {
-    // Exclusion sets remove visually similar characters: l, I, 1, O, 0, o
-    lowercase: "abcdefghjkmnpqrstuvwxyz", // removed l, o, i
-    uppercase: "ABCDEFGHJKMNPQRSTUVWXYZ", // removed I, O, L
-    numbers: "23456789", // removed 0,1
-    symbols: "!@#$%^&*()_+-=[]{}|;:,.<>?",
-    allLowercase: "abcdefghijklmnopqrstuvwxyz",
-    allUppercase: "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-    allNumbers: "0123456789",
-    similar: /[lI1O0o]/g
+    lowercase: 'abcdefghjkmnpqrstuvwxyz',
+    uppercase: 'ABCDEFGHJKMNPQRSTUVWXYZ',
+    numbers: '23456789',
+    symbols: '!@#$%^&*()_+-=[]{}|;:,.<>?',
+    ambiguous: /[lI1O0o]/g,
   };
 
   public generate(
@@ -866,8 +1105,9 @@ class SecurePasswordGenerator {
       includeUppercase?: boolean;
       includeNumbers?: boolean;
       includeSymbols?: boolean;
-      excludeSimilar?: boolean;
+      excludeAmbiguous?: boolean;
       minEntropy?: number;
+      memorableFormat?: boolean;
     } = {}
   ): string {
     const {
@@ -875,67 +1115,49 @@ class SecurePasswordGenerator {
       includeUppercase = true,
       includeNumbers = true,
       includeSymbols = true,
-      excludeSimilar = true,
-  minEntropy = 50,
+      excludeAmbiguous = true,
+      minEntropy = 50,
+      memorableFormat = false,
     } = options;
 
-    // Validate length
     if (length < 8 || length > 256) {
-      throw new Error("Password length must be between 8 and 256 characters");
+      throw new Error('Password length must be between 8 and 256 characters');
     }
 
-    // Build character set
-    let charset = "";
+    if (memorableFormat) {
+      return this.generateMemorablePassword(length);
+    }
+
+    let charset = '';
     const requiredChars: string[] = [];
 
     if (includeLowercase) {
-      const chars = excludeSimilar
-        ? this.charsets.lowercase
-        : this.charsets.allLowercase;
-      charset += chars;
-      requiredChars.push(this.secureRandomChar(chars));
+      charset += this.charsets.lowercase;
+      requiredChars.push(this.secureRandomChar(this.charsets.lowercase));
     }
-
     if (includeUppercase) {
-      const chars = excludeSimilar
-        ? this.charsets.uppercase
-        : this.charsets.allUppercase;
-      charset += chars;
-      requiredChars.push(this.secureRandomChar(chars));
+      charset += this.charsets.uppercase;
+      requiredChars.push(this.secureRandomChar(this.charsets.uppercase));
     }
-
     if (includeNumbers) {
-      const chars = excludeSimilar
-        ? this.charsets.numbers
-        : this.charsets.allNumbers;
-      charset += chars;
-      requiredChars.push(this.secureRandomChar(chars));
+      charset += this.charsets.numbers;
+      requiredChars.push(this.secureRandomChar(this.charsets.numbers));
     }
-
     if (includeSymbols) {
-      const sym = this.charsets.symbols;
-      charset += sym;
-      requiredChars.push(this.secureRandomChar(sym));
+      charset += this.charsets.symbols;
+      requiredChars.push(this.secureRandomChar(this.charsets.symbols));
     }
 
-    if (!charset || requiredChars.length > length) {
-      throw new Error("Invalid password generation options");
+    if (!charset) {
+      throw new Error('At least one character type must be included');
     }
 
-    // Remove similar characters globally if requested
-    if (excludeSimilar) {
-      charset = charset.replace(this.charsets.similar, '');
-    }
-
-    // Generate password
-    let password = "";
+    let password = '';
     let attempts = 0;
-    const maxAttempts = 100;
 
-    while (attempts < maxAttempts) {
-      password = this.generatePassword(length, charset, requiredChars);
-
-      // Validate entropy
+    while (attempts < 100) {
+      password = this.generatePasswordAttempt(length, charset, requiredChars);
+      
       const validation = validator.validate(password, {
         minEntropy,
         preventCommonPasswords: false,
@@ -945,36 +1167,48 @@ class SecurePasswordGenerator {
       if (validation.entropy >= minEntropy) {
         break;
       }
-
       attempts++;
     }
 
-    if (attempts >= maxAttempts) {
-      throw new Error("Failed to generate password with sufficient entropy");
+    if (attempts >= 100) {
+      throw new Error('Failed to generate password with sufficient entropy');
     }
 
     return password;
   }
 
-  private generatePassword(
+  private generatePasswordAttempt(
     length: number,
     charset: string,
     requiredChars: string[]
   ): string {
     const password: string[] = [...requiredChars];
 
-    // Fill remaining positions
     for (let i = requiredChars.length; i < length; i++) {
       password.push(this.secureRandomChar(charset));
     }
 
-    // Secure shuffle using Fisher-Yates
+    // Fisher-Yates shuffle
     for (let i = password.length - 1; i > 0; i--) {
       const j = this.secureRandomInt(i + 1);
       [password[i], password[j]] = [password[j], password[i]];
     }
 
-    return password.join("");
+    return password.join('');
+  }
+
+  private generateMemorablePassword(totalLength: number): string {
+    const words = ['Time', 'Space', 'Fire', 'Water', 'Earth', 'Wind'];
+    const separators = ['-', '_', '.', '!'];
+    
+    let password = '';
+    while (password.length < totalLength) {
+      password += words[this.secureRandomInt(words.length)];
+      password += separators[this.secureRandomInt(separators.length)];
+      password += this.secureRandomInt(100).toString();
+    }
+
+    return password.substring(0, totalLength);
   }
 
   private secureRandomChar(charset: string): string {
@@ -996,6 +1230,9 @@ class SecurePasswordGenerator {
   }
 }
 
+// ============================= Main Instances =============================
+
+const hasher = new PasswordHasher();
 const generator = new SecurePasswordGenerator();
 
 // ============================= Exported Functions =============================
@@ -1024,8 +1261,20 @@ export async function verifyAndCheckRehash(
   const result = await hasher.verify(password, hash, options);
 
   if (result.valid && result.needsRehash && options.updateHash) {
-    const newHash = await hasher.hash(password, { skipValidation: true });
-    return { ...result, newHash };
+    try {
+      const newHash = await hasher.hash(password, { 
+        skipValidation: true,
+        identifier: options.identifier 
+      });
+      metricsCollector?.recordRehash();
+      return { ...result, newHash };
+    } catch (error) {
+      // Log but don't fail verification if rehash fails
+      securityEvents.emitSecurityEvent('rehash_failed', { 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      });
+      return result;
+    }
   }
 
   return result;
@@ -1046,27 +1295,72 @@ export function generateSecurePassword(
   return generator.generate(length, options);
 }
 
-export function needsRehash(hash: string): boolean {
-  if (!hash) return true;
-
-  if (hash.startsWith("$argon2")) {
-    return hasher["needsArgon2Rehash"](hash);
-  } else if (hash.startsWith("$2")) {
-    return hasher["needsBcryptRehash"](hash);
-  }
-
-  return true;
+export function getSecurityMetrics(): SecurityMetrics | null {
+  return metricsCollector?.getMetrics() || null;
 }
 
-// Cleanup on process exit
-process.on("exit", () => {
-  rateLimiter.destroy();
-});
+export function subscribeToSecurityEvents(
+  callback: (event: any) => void
+): () => void {
+  securityEvents.on('security', callback);
+  return () => securityEvents.off('security', callback);
+}
 
-// Export types for external use
+// ============================= Public Rehash Helper =============================
+/**
+ * Determine if a stored password hash should be rehashed according to current security configuration.
+ * Supports bcrypt ($2*) and argon2id ($argon2id$) hashes.
+ * Returns false for unrecognized algorithms (caller may choose to force upgrade separately).
+ */
+export function needsRehash(hash: string): boolean {
+  if (!hash || typeof hash !== 'string') return false;
+
+  // Bcrypt pattern: $2b$12$...
+  if (hash.startsWith('$2a$') || hash.startsWith('$2b$') || hash.startsWith('$2y$')) {
+    const match = hash.match(/^\$2[aby]?\$(\d{2})\$/);
+    if (!match) return false;
+    const rounds = parseInt(match[1], 10);
+    return rounds < config.BCRYPT_ROUNDS;
+  }
+
+  // Argon2id pattern contains parameters segment with m=,t=,p=
+  if (hash.startsWith('$argon2id$')) {
+    const match = hash.match(/m=(\d+),t=(\d+),p=(\d+)/);
+    if (!match) return false;
+    const memoryCost = parseInt(match[1], 10);
+    const timeCost = parseInt(match[2], 10);
+    const parallelism = parseInt(match[3], 10);
+    return (
+      memoryCost < config.ARGON2_MEMORY_COST ||
+      timeCost < config.ARGON2_TIME_COST ||
+      parallelism < config.ARGON2_PARALLELISM
+    );
+  }
+
+  return false; // Unknown / already adequate
+}
+
+// ============================= Cleanup =============================
+
+const cleanup = () => {
+  rateLimiter.destroy();
+  hasher.destroy();
+  if (metricsCollector) {
+    const finalMetrics = metricsCollector.getMetrics();
+    console.log('[Security] Final metrics:', finalMetrics);
+  }
+};
+
+process.on('exit', cleanup);
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);
+
+// ============================= Export Types =============================
+
 export type {
   PasswordValidationResult,
   HashOptions,
   VerifyOptions,
   PasswordPolicy,
+  SecurityMetrics,
 };

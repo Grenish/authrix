@@ -467,23 +467,37 @@ export function createSignupHandler() {
     }
     try {
       const body = await request.json();
-      const { email, password } = body || {};
+      const { email, password, rememberMe } = body || {};
       if (!email || !password) {
         return Response.json({ error: 'Email and password are required' }, { status: 400 });
       }
       // Optional profile fields
       const { username, firstName, lastName, fullName, profilePicture } = body || {};
+      const ipHeader = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip');
+      const requesterIp = ipHeader ? ipHeader.split(',')[0].trim() : undefined;
+      const userAgent = request.headers.get('user-agent') || undefined;
       const result = await signupCore(email, password, {
         includeUserProfile: true,
         username,
         firstName,
         lastName,
         fullName,
-        profilePicture
+        profilePicture,
+        requesterIp,
+        userAgent,
+        rememberMe
       });
-      const response = Response.json({ success: true, user: result.user, message: 'Account created successfully' });
+      const payload: any = { success: true, user: result.user, message: 'Account created successfully', isNewUser: result.isNewUser };
+      if (typeof result.requiresEmailVerification !== 'undefined') payload.requiresEmailVerification = result.requiresEmailVerification;
+      if (typeof result.passwordStrength !== 'undefined') payload.passwordStrength = result.passwordStrength;
+      if (typeof result.passwordEntropy !== 'undefined') payload.passwordEntropy = result.passwordEntropy;
+      const response = Response.json(payload);
       const cookie = CookieUtils.createCookieString(CookieUtils.getCookieName(), result.token, { ...result.cookieOptions });
       response.headers.set('Set-Cookie', cookie);
+      if (rememberMe) {
+        const rememberCookie = CookieUtils.createCookieString(`${CookieUtils.getCookieName()}_remember`, 'true', { ...result.cookieOptions });
+        response.headers.append('Set-Cookie', rememberCookie);
+      }
       return response;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Signup failed';
@@ -505,14 +519,35 @@ export function createSigninHandler() {
           error: 'Signin not supported in edge runtime. Add `export const runtime = "nodejs";` to your route.'
         }, { status: 500 });
       }
-      const { email, password } = await request.json();
+      const body = await request.json();
+      const { email, password, rememberMe } = body || {};
       if (!email || !password) {
         return Response.json({ error: 'Email and password are required' }, { status: 400 });
       }
-      const result = await signinCore(email, password);
-      const response = Response.json({ success: true, user: result.user, message: 'Signed in successfully' });
-      const cookie = CookieUtils.createCookieString(CookieUtils.getCookieName(), result.token, { ...result.cookieOptions });
-      response.headers.set('Set-Cookie', cookie);
+      // Derive requester IP (best effort) & user agent
+      const ipHeader = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip');
+      const requesterIp = ipHeader ? ipHeader.split(',')[0].trim() : undefined;
+      const userAgent = request.headers.get('user-agent') || undefined;
+
+      const result = await signinCore(email, password, { rememberMe, requesterIp, userAgent });
+      const responsePayload: any = { success: true, user: result.user, message: 'Signed in successfully' };
+      if (typeof result.isFirstLogin !== 'undefined') responsePayload.isFirstLogin = result.isFirstLogin;
+      if (typeof result.mustChangePassword !== 'undefined') responsePayload.mustChangePassword = result.mustChangePassword;
+      if (typeof result.passwordStrengthWarning !== 'undefined') responsePayload.passwordStrengthWarning = result.passwordStrengthWarning;
+
+      const response = Response.json(responsePayload);
+      const authCookie = CookieUtils.createCookieString(CookieUtils.getCookieName(), result.token, { ...result.cookieOptions });
+      response.headers.set('Set-Cookie', authCookie);
+
+      // Optional remember flag cookie (mirrors Express handler behaviour)
+      if (rememberMe) {
+        const rememberCookie = CookieUtils.createCookieString(`${CookieUtils.getCookieName()}_remember`, 'true', { ...result.cookieOptions });
+        response.headers.append('Set-Cookie', rememberCookie);
+      }
+
+      // Surface password attention via headers
+      if (result.mustChangePassword) response.headers.set('X-Password-Change-Required', 'true');
+      if (result.passwordStrengthWarning) response.headers.set('X-Password-Strength-Warning', 'true');
       return response;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Signin failed';
@@ -628,22 +663,32 @@ export function createSignupHandlerPages() {
       return res.status(405).json({ error: 'Method not allowed' });
     }
     try {
-      const { email, password } = req.body || {};
+      const { email, password, rememberMe } = req.body || {};
       if (!email || !password) {
         return res.status(400).json({ error: 'Email and password are required' });
       }
       const { username, firstName, lastName, fullName, profilePicture } = req.body || {};
+      const ipHeader = req.headers['x-forwarded-for'] || req.headers['x-real-ip'];
+      const requesterIp = typeof ipHeader === 'string' ? ipHeader.split(',')[0].trim() : Array.isArray(ipHeader) ? ipHeader[0] : (req.socket?.remoteAddress);
+      const userAgent = req.headers['user-agent'];
       const result = await signupCore(email, password, {
         includeUserProfile: true,
         username,
         firstName,
         lastName,
         fullName,
-        profilePicture
+        profilePicture,
+        requesterIp,
+        userAgent,
+        rememberMe
       });
       const cookie = CookieUtils.createCookieString(CookieUtils.getCookieName(), result.token, { ...result.cookieOptions });
-      res.setHeader('Set-Cookie', cookie);
-      return res.json({ success: true, user: result.user, message: 'Account created successfully' });
+      const cookies: string[] = [cookie];
+      if (rememberMe) {
+        cookies.push(CookieUtils.createCookieString(`${CookieUtils.getCookieName()}_remember`, 'true', { ...result.cookieOptions }));
+      }
+      res.setHeader('Set-Cookie', cookies);
+      return res.json({ success: true, user: result.user, message: 'Account created successfully', isNewUser: result.isNewUser, requiresEmailVerification: result.requiresEmailVerification, passwordStrength: result.passwordStrength, passwordEntropy: result.passwordEntropy });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Signup failed';
       const status = error instanceof ConflictError ? 409 : 400;
@@ -658,14 +703,38 @@ export function createSigninHandlerPages() {
       return res.status(405).json({ error: 'Method not allowed' });
     }
     try {
-      const { email, password } = req.body;
+      const { email, password, rememberMe } = req.body || {};
       if (!email || !password) {
         return res.status(400).json({ error: 'Email and password are required' });
       }
-      const result = await signinCore(email, password);
+      const ipHeader = req.headers['x-forwarded-for'] || req.headers['x-real-ip'];
+      const requesterIp = typeof ipHeader === 'string' ? ipHeader.split(',')[0].trim() : Array.isArray(ipHeader) ? ipHeader[0] : (req.socket?.remoteAddress);
+      const userAgent = req.headers['user-agent'];
+
+      const result = await signinCore(email, password, { rememberMe, requesterIp, userAgent });
       const cookie = CookieUtils.createCookieString(CookieUtils.getCookieName(), result.token, { ...result.cookieOptions });
-      res.setHeader('Set-Cookie', cookie);
-      return res.json({ success: true, user: result.user, message: 'Signed in successfully' });
+
+      // Support multiple cookies (auth + remember flag)
+      const cookies: string[] = [cookie];
+      if (rememberMe) {
+        cookies.push(
+          CookieUtils.createCookieString(`${CookieUtils.getCookieName()}_remember`, 'true', { ...result.cookieOptions })
+        );
+      }
+      res.setHeader('Set-Cookie', cookies);
+
+      // Warning / info headers
+      if (result.mustChangePassword) res.setHeader('X-Password-Change-Required', 'true');
+      if (result.passwordStrengthWarning) res.setHeader('X-Password-Strength-Warning', 'true');
+
+      return res.json({
+        success: true,
+        user: result.user,
+        message: 'Signed in successfully',
+        isFirstLogin: result.isFirstLogin,
+        mustChangePassword: result.mustChangePassword,
+        passwordStrengthWarning: result.passwordStrengthWarning
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Signin failed';
       const status = error instanceof UnauthorizedError ? 401 : error instanceof ForbiddenError ? 403 : 400;

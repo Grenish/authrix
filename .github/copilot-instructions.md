@@ -1,72 +1,73 @@
-# Authrix AI Contributor Instructions
+## Authrix AI Contributor Guide (Focused Instructions for Coding Agents)
 
-Purpose: Enable an AI agent to make high-quality, merge-ready contributions fast. Focus on concrete project realities, not generic advice.
+Purpose: Equip an AI agent to make correct, low‑friction contributions to the Authrix authentication library (v2.1.x) immediately. Keep edits minimal, respect existing patterns, and prefer incremental improvements.
 
-## 1. Architecture Mental Model
-- Modular auth library: core logic in `src/core` (signup, signin, session, 2FA, SSO) + thin framework façades (`src/nextjs.ts`, `src/react.ts`, `src/middleware.ts`, `src/universal.ts`).
-- Extensibility via adapters and providers:
-  - Database adapters in `src/adapters` (Mongo, PostgreSQL, Prisma bridge placeholder). Each implements the `AuthDbAdapter` contract (see `src/types/db` — infer shapes from usages like in `mongo.ts`).
-  - OAuth/SSO providers in `src/providers` (Google, GitHub) invoked through higher-level SSO orchestration in core.
-  - Email senders in `src/email` (gmail, sendgrid, resend, smtp, console) selected by config.
-- Public surface is re-exported through `src/index.ts` and entrypoints declared in `package.json` `exports` map. Keep API stable unless intentionally versioning.
-- Runtime supports Node, Next.js App Router (edge-capable) and React SPA (client helpers) by branching only in framework wrappers—core stays universal.
+### 1. Architectural Big Picture
+Unified facade `auth` (in `src/auth.ts`) exposes: `actions`, `session`, `middleware`, `handlers`, `cookies`, `env`.
+Core logic (signup / signin / logout / session / password reset / SSO) lives under `src/core/` as small pure functions. Framework specifics (Next.js, React helpers, middleware) are thin adapters under `src/frameworks` / root barrels.
+Global runtime configuration is a singleton in `src/config/index.ts` (`authConfig`, initialized via `initAuth`). Avoid introducing additional global mutable state—extend config through that singleton if necessary.
+Build outputs multiple subpath exports (see `package.json:exports`) each mapping to a dedicated entry file in `tsup.config.ts`. When adding a new public module, update BOTH `src/<name>.ts` and `tsup.config.ts` entries and `package.json.exports` consistently.
 
-## 2. Key Conventions
-- All modules are ES modules (`"type": "module"`); keep imports explicit (no implicit index where clarity helps).
-- Input normalization: emails + usernames lowercased & trimmed (see helper logic in `mongo.ts`). Mirror this in any new adapter or feature.
-- Error handling: Throw `Error` with human-readable message; upstream route handlers convert to JSON `{ success: false, error: { message } }`. Stay consistent.
-- Date fields: Always `Date` objects in DB layer; convert IDs (`ObjectId` → string) before returning to callers.
-- Indexing & performance: Adapters create necessary indexes at connect (see `createIndexes()` in `mongo.ts`). For new collections add background index creation and swallow individual index errors (non-fatal) like existing pattern.
-- Security defaults: bcrypt (bcryptjs) for password hashing; JWT via `jwtSecret` passed into `initAuth`; HTTP-only cookie named `auth_token` unless overridden.
-- Limit queries for potentially unbounded lists (e.g. recent 2FA codes limit 10). Follow similar defensive limits.
+### 2. Key Conventions & Patterns
+TypeScript module format: ESM + CJS dual build via tsup with tree‑shaking and property mangling of names starting with `_`. Avoid adding console logs; they are stripped anyway—prefer the central `logger` in `src/utils/logger.ts`.
+Deprecation strategy: Legacy direct exports remain (emitting one‑time warnings). If adding a deprecation, mirror this pattern (single warn, development only) instead of removing immediately.
+Password hashing & security utilities centralized in `src/utils/hash.ts`; do not inline crypto logic in feature modules—call those helpers.
+Cookie handling centralized (see `internalCookies` in `src/internal/cookies.*`). Never hand‑craft Set-Cookie headers outside those helpers.
+Environment detection & lazy Next.js handler loading uses dynamic `import()` in `auth.ts`; preserve the lazy, cached pattern if extending handlers.
+Email services registered via `EmailServiceRegistry` (`src/core/emailRegistry.ts`) and optionally auto-detected from env inside `initEmailServices()`—extend by registering a new provider class and adding detection logic (non-breaking) instead of branching in consumer code.
 
-## 3. Build & Test Workflow
-- Build: `npm run build` uses `tsup` to emit dual CJS + ESM + d.ts into `dist`. Do not rely on path imports to internal `src/**` in published code; import via package entrypoints.
-- Tests: Jest (`npm test`, coverage via `npm run test:coverage`). Place new tests under `src/__tests__/**` mirroring source folder structure. Use existing test naming style (one test file per feature area) if extending.
-- Clean build artifacts with `npm run clean` before diagnosing build issues.
-- Prepublish hooks (`prepare`, `prepack`) auto-build—avoid committing `dist`.
+### 3. Build & Test Workflow (Agent Essentials)
+Build: `npm run build` (tsup) produces minified dual-format files under `dist/`. Do not check in `dist/`.
+Tests: `npm test` (Jest + ts-jest ESM). Coverage: `npm run test:coverage`. For focused categories use name patterns (e.g. security: `npm run test:security`).
+When adding new source that should be covered, ensure it sits under `src/` so it is included by coverage globs (exclude d.ts and `src/index.ts`).
+If adding a new entry file intended for publishing, include it in: `tsup.config.ts entry[]`, `package.json exports`, and confirm types generation.
 
-## 4. Adding / Modifying Features
-- Extend auth flows in `src/core` keeping pure, framework-agnostic functions. Any HTTP / Request / Response specifics belong in framework wrappers (`src/nextjs.ts`, `src/middleware.ts`, React helpers, etc.).
-- When touching public API: confirm/update re-exports in `src/index.ts` and (if new subpath) add to `package.json` `exports` with proper `types`/`require`/`import` triple.
-- For a new DB adapter: replicate patterns from `mongo.ts` (connection singleton, index creation, normalization, error code translation e.g. duplicate key 11000 → user-friendly). Ensure all required `AuthDbAdapter` methods exist (see existing adapters for shape).
-- For new OAuth provider: place under `src/providers/<provider>.ts`; expose high-level helper through central oauth/sso core without leaking provider-specific internals to framework layers.
-- Keep side-effect-free initialization—`initAuth` configures singletons; avoid extra hidden global state.
+### 4. Error & Logging Model
+Errors: Throw plain `Error` with a concise, user-comprehensible message. API route layers decide JSON formatting. Avoid throwing custom classes unless introducing a fully adopted error taxonomy.
+Logging: Use `logger` (import from root) with structured methods. For deprecations or security notices, follow existing categories (`deprecation`, `security`, `adapter`, `session`).
 
-## 5. Configuration & Environment
-- Critical env vars: `JWT_SECRET`, DB adapter specifics (`MONGO_URI`, `DB_NAME` or Postgres URL), OAuth creds (`GOOGLE_*`, `GITHUB_*`), email provider creds. Fail fast with descriptive errors if required values missing.
-- Optional collections/table names are overridable but default to sensible names (`users`, `two_factor_codes`). Reflect overrides everywhere instead of hardcoding.
+### 5. Session & Rolling Refresh
+Session lifetime & rolling refresh thresholds stored in `authConfig` (`sessionMaxAgeMs`, `rollingSessionEnabled`, `rollingSessionThresholdSeconds`). If adding session behavior, read them via accessors—do not capture values at module top if they might change during init ordering.
+Token inspection functions live in `src/core/session.ts`. Add enhancements there; keep side‑effects (like cookie issuance) outside core pure logic.
 
-## 6. Security & Validation Patterns
-- Normalize & validate early (email, username). Avoid leaking whether a user exists in password reset / 2FA flows—return generic messages while logging internally (see README flows).
-- Expiring artifacts: Use TTL index (e.g. `expiresAt` with `expireAfterSeconds: 0`) for codes; if adding new ephemeral docs, follow same TTL pattern.
-- 2FA & reset code queries always restrict to non-expired + unused items and limit results; copy that approach.
+### 6. Adding Framework Integrations / Handlers
+Next.js handlers are factory-generated in `frameworks/nextjs.*` (loaded lazily). To add a new handler:
+1. Implement a factory `createXHandler` in the Next.js module.
+2. Map it in `HANDLER_MAP` inside `auth.ts`.
+3. Expose via `handlers.<name>` with the same lazy pattern (define property getter, then redefine).
+Maintain `createRouteHandler` error semantics (returns JSON `{ success:false, error:{message} }`).
 
-## 7. Error / Conflict Handling
-- Duplicate uniqueness conflicts: Translate adapter-specific error codes to clear field-based message: Email or Username already in use (see duplicate key handling in `createUser` / `updateUser`). Replicate in new adapters.
-- Throw, don’t return sentinel objects—callers consistently expect exceptions for failure paths.
+### 7. Extensibility Points
+DB Adapters: Implement `AuthDbAdapter` (`src/types/db.ts`) functions (create / get / update user + SSO / recovery helpers). Normalize email (trim+lowercase) like existing adapters.
+Email Providers: Implement send interface mirrored by existing providers (Resend, SendGrid, Gmail, SMTP, Console). Register via `EmailServiceRegistry.register(name, instance)` and set capabilities if available.
+OAuth Providers: Follow shape in `src/providers/<provider>.ts` (state verification, token exchange, profile normalization). Keep provider-specific HTTP inside provider module, not core logic.
 
-## 8. Performance & Resource Management
-- Use singleton connections (see `MongoConnection`); expose `reset` + `disconnect` utilities for tests. For new adapters provide similar test hooks.
-- Avoid unbounded `find()`; always project only required fields (see projections in user lookups) to reduce payload.
+### 8. File & Export Hygiene
+Do not introduce circular dependencies between entry files; keep shared logic in internal modules.
+Avoid expanding the public surface casually—prefer enhancing the unified `auth` namespace unless a clear subpath export is justified.
+When renaming or moving a core function with external usage, consider adding a wrapper with a one‑time deprecation warning for at least one minor version.
 
-## 9. Testing Guidance
-- Mock external services (email, OAuth HTTP exchanges) rather than hitting network. Follow pattern: inject adapter instance; do not embed network calls directly inside core logic without abstraction.
-- For regression tests around new features: test both success path and uniqueness / invalid state errors.
+### 9. Testing Additions
+Use existing Jest setup (`jest.setup.ts`) which seeds `JWT_SECRET`. If a test needs a different secret, override locally but restore after. Mock console warnings sparingly—setup already stubs `console.warn`.
+Prefer unit tests near behavior modules under `__tests__/` mirroring directory (e.g., `src/core/__tests__/signup.test.ts`).
 
-## 10. Code Style & Output
-- Keep functions small & composable; no large route handlers in core—composition belongs to framework wrappers.
-- Prefer explicit return types on exported functions to preserve stable public surface in d.ts.
+### 10. Security Practices (Project-Specific)
+Never derive peppers or secrets ad hoc; rely on `AUTHRIX_PASSWORD_PEPPER` (override usage currently deprecated—see warning in `config/index.ts`).
+If adding password policy logic, extend `validatePassword` in `utils/hash.ts` instead of duplicating rules.
+Do not leak secret values in thrown errors or logs—log only presence / status indicators.
 
-## 11. Common Pitfalls to Avoid
-- Don’t access framework-specific Request/Response inside core modules.
-- Don’t bypass normalization when updating user fields (email, username must stay lowercase).
-- Don’t introduce breaking changes to existing subpath exports without coordinating a semver bump.
-- Don’t swallow connection errors silently—only index creation failures are intentionally ignored.
+### 11. Performance Considerations
+Hot paths: signup/signin/session token validation. Keep these free of synchronous I/O beyond hashing and JWT operations. Any new optional runtime checks should be feature-flagged (config) or short‑circuited fast.
+Minification removes `console.*`; avoid depending on side effects of removed statements.
 
-## 12. Quick Reference (Examples)
-- Duplicate user creation handling: see `createUser` in `mongo.ts` (error.code === 11000 logic).
-- Expiring codes TTL: index spec `{ expiresAt: 1 }` with `{ expireAfterSeconds: 0 }` in `createIndexes()`.
-- Recent 2FA code fetch: `find(query).sort({ createdAt: -1 }).limit(10)` pattern.
+### 12. PR Scope Guidance for Agent
+Small, self‑contained changes: docs, new adapter/provider, incremental tests, handler additions.
+When uncertain about a breaking change to exports or config shape, open a draft PR (or request human review) rather than merging code that alters public API signatures.
 
-Feedback welcome: If any section seems ambiguous (e.g., adapter contract specifics or adding a new export), highlight in PR description for adjustment.
+### 13. Quick Reference (Examples)
+Initialize: `initAuth({ jwtSecret, db: mongoAdapter, session:{ rolling:{ enabled:true, thresholdSeconds:900 }}})`
+Signup action usage: `await auth.actions.signup(email, pwd, { res })`
+Session check: `await auth.session.getUser({ req })`
+Create cookie manually (advanced): `res.setHeader('Set-Cookie', auth.cookies.create(token))`
+
+Keep this file concise—add only patterns proven in code. Remove or refactor stale guidance when behavior changes in source.

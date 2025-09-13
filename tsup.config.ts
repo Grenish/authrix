@@ -23,16 +23,14 @@ export default defineConfig({
     ],
     format: ["cjs", "esm"],
     dts: true,
-    sourcemap: false, // Remove source maps to reduce size
+    sourcemap: false,
     clean: true,
     outDir: "dist",
     target: "node18",
-    // Re-enable code splitting so consumers only load what they import; we'll reduce file count via other means
     splitting: true,
-    minify: true, // Enable minification
-    treeshake: true, // Enable tree-shaking
+    minify: true,
+    treeshake: true,
     external: [
-        // Core peer dependencies
         "mongodb",
         "@supabase/supabase-js", 
         "firebase",
@@ -42,22 +40,18 @@ export default defineConfig({
         "axios",
         "dotenv",
         "express",
-        // Next.js dependencies (optional peer dependencies)
         "next",
         "next/server",
         "next/headers",
         "next/navigation",
-        // React dependencies (optional peer dependencies)
         "react",
     "react-dom",
     "@prisma/client"
     ],
     esbuildOptions(options) {
-        // Enable advanced minification
         options.drop = ['console', 'debugger'];
         options.legalComments = 'none';
         options.treeShaking = true;
-        // Enable property mangling for better compression
         options.mangleProps = /^_/;
     },
     outExtension({ format }) {

@@ -482,7 +482,7 @@ class PasswordValidator {
     const hasLower = /[a-z]/.test(password);
     const hasUpper = /[A-Z]/.test(password);
     const hasNumber = /\d/.test(password);
-    const hasSymbol = /[!@#$%^&*()_+\-=```math```{};':"\\|,.<>\/?`~]/.test(password);
+    const hasSymbol = /[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?`~]/.test(password);
 
     if (finalPolicy.requireLowercase && !hasLower) {
       errors.push('Password must contain lowercase letters');
@@ -558,7 +558,7 @@ class PasswordValidator {
     if (/[a-z]/.test(password)) poolSize += charsets.lowercase;
     if (/[A-Z]/.test(password)) poolSize += charsets.uppercase;
     if (/\d/.test(password)) poolSize += charsets.numbers;
-    if (/[!@#$%^&*()_+\-=```math```{};':"\\|,.<>\/?`~]/.test(password)) poolSize += charsets.symbols;
+    if (/[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?`~]/.test(password)) poolSize += charsets.symbols;
     if (/[^\x00-\x7F]/.test(password)) poolSize += charsets.unicode;
 
     if (poolSize === 0) return 0;
@@ -759,8 +759,8 @@ class PasswordHasher {
       if (options.identifier && !options.skipRateLimit) {
         const { allowed, retryAfter } = await rateLimiter.checkLimit(options.identifier);
         if (!allowed) {
-          securityEvents.emitSecurityEvent('verify_rate_limited', { 
-            identifier: options.identifier 
+          securityEvents.emitSecurityEvent('verify_rate_limited', {
+            identifier: options.identifier,
           });
           throw new Error(`Rate limit exceeded. Retry after ${retryAfter} seconds`);
         }
@@ -769,22 +769,23 @@ class PasswordHasher {
       // Apply pepper and verify
       const pepper = config.getPepper();
       const pepperedPassword = this.applyPepper(password, pepper);
-      
+
       let valid = false;
       let needsRehash = false;
 
+      // Primary verify with current pepper
       const result = await this.concurrencyLimiter.execute(async () => {
         if (hash.startsWith('$argon2')) {
           const isValid = await argon2.verify(hash, pepperedPassword);
-          return { 
-            valid: isValid, 
-            needsRehash: isValid && this.needsArgon2Rehash(hash) 
+          return {
+            valid: isValid,
+            needsRehash: isValid && this.needsArgon2Rehash(hash),
           };
         } else if (hash.startsWith('$2')) {
           const isValid = await bcrypt.compare(pepperedPassword, hash);
-          return { 
-            valid: isValid, 
-            needsRehash: isValid && this.needsBcryptRehash(hash) 
+          return {
+            valid: isValid,
+            needsRehash: isValid && this.needsBcryptRehash(hash),
           };
         } else {
           await this.dummyVerify();
@@ -799,7 +800,7 @@ class PasswordHasher {
       if (!valid && config.getRotationPepper()) {
         const rotationPepper = config.getRotationPepper()!;
         const rotationPepperedPassword = this.applyPepper(password, rotationPepper);
-        
+
         const rotationResult = await this.concurrencyLimiter.execute(async () => {
           if (hash.startsWith('$argon2')) {
             return await argon2.verify(hash, rotationPepperedPassword);
@@ -812,8 +813,42 @@ class PasswordHasher {
         if (rotationResult) {
           valid = true;
           needsRehash = true; // Force rehash to update pepper
-          securityEvents.emitSecurityEvent('pepper_rotation_used', { 
-            identifier: options.identifier 
+          securityEvents.emitSecurityEvent('pepper_rotation_used', {
+            identifier: options.identifier,
+          });
+        }
+      }
+
+      // Legacy (pre-pepper) fallback: verify raw password if peppered checks failed
+      if (!valid) {
+        const legacyResult = await this.concurrencyLimiter.execute(async () => {
+          if (hash.startsWith('$argon2')) {
+            return await argon2.verify(hash, password);
+          } else if (hash.startsWith('$2')) {
+            return await bcrypt.compare(password, hash);
+          }
+          return false;
+        });
+
+        if (legacyResult) {
+          valid = true;
+          needsRehash = true; // upgrade to current pepper and settings
+          securityEvents.emitSecurityEvent('legacy_no_pepper_verified', {
+            identifier: options.identifier,
+          });
+        }
+      }
+
+      // If valid, ensure algorithm preference is enforced (migrate on next hash)
+      if (valid) {
+        const storedAlgo = hash.startsWith('$argon2') ? 'argon2id' : (hash.startsWith('$2') ? 'bcrypt' : null);
+        const preferredAlgo = process.env.AUTHRIX_HASH_ALGO === 'bcrypt' ? 'bcrypt' : 'argon2id';
+        if (storedAlgo && storedAlgo !== preferredAlgo) {
+          needsRehash = true;
+          securityEvents.emitSecurityEvent('algorithm_upgrade_needed', {
+            identifier: options.identifier,
+            from: storedAlgo,
+            to: preferredAlgo,
           });
         }
       }
@@ -828,18 +863,17 @@ class PasswordHasher {
       }
 
       metricsCollector?.recordVerifyOperation(Date.now() - startTime, valid);
-      
+
       if (!valid) {
-        securityEvents.emitSecurityEvent('verify_failed', { 
-          identifier: options.identifier 
+        securityEvents.emitSecurityEvent('verify_failed', {
+          identifier: options.identifier,
         });
       }
 
       return { valid, needsRehash };
-
     } catch (error) {
-      securityEvents.emitSecurityEvent('verify_error', { 
-        error: error instanceof Error ? error.message : 'Unknown error' 
+      securityEvents.emitSecurityEvent('verify_error', {
+        error: error instanceof Error ? error.message : 'Unknown error',
       });
       await this.dummyVerify();
       return { valid: false, needsRehash: false };
@@ -971,14 +1005,65 @@ class WorkerPool {
     for (let i = 0; i < size; i++) this.spawn();
   }
 
-  private workerScriptUrl(): URL {
-    return new URL('./passwordWorker.js', import.meta.url);
+  private inlineWorkerCode(): string {
+    // Inline CommonJS worker code to avoid external file resolution in bundlers
+    // Note: worker_threads with { eval: true } executes in CJS context, so require() is available.
+    return `const { parentPort } = require('worker_threads');
+const bcrypt = require('bcryptjs');
+const argon2 = require('argon2');
+const { randomBytes } = require('crypto');
+
+const port = parentPort;
+if (port) {
+  port.on('message', async (message) => {
+    const response = { id: message.id, success: false };
+    try {
+      if (message.type === 'hash') {
+        if (message.algorithm === 'bcrypt') {
+          const rounds = message.options?.bcryptRounds || 14;
+          response.result = await bcrypt.hash(message.password, rounds);
+        } else {
+          const options = message.options?.argon2Options || { timeCost: 3, memoryCost: 65536, parallelism: 4, saltLength: 16 };
+          response.result = await argon2.hash(message.password, { type: argon2.argon2id, timeCost: options.timeCost, memoryCost: options.memoryCost, parallelism: options.parallelism, salt: randomBytes(options.saltLength) });
+        }
+      } else if (message.type === 'verify') {
+        if (!message.hash) throw new Error('Hash is required for verification');
+        if (message.hash.startsWith('$2')) {
+          response.result = await bcrypt.compare(message.password, message.hash);
+        } else if (message.hash.startsWith('$argon2')) {
+          response.result = await argon2.verify(message.hash, message.password);
+        } else {
+          throw new Error('Unsupported hash format');
+        }
+      } else {
+        throw new Error('Unknown operation type: ' + message.type);
+      }
+      response.success = true;
+    } catch (error) {
+      response.success = false;
+      response.error = error instanceof Error ? error.message : String(error);
+    }
+    port.postMessage(response);
+  });
+}`;
   }
 
   private spawn() {
     if (this.destroyed) return;
     try {
-  const worker = new Worker(this.workerScriptUrl());
+      // Prefer inline worker to avoid bundler resolution issues entirely
+      let worker: Worker | null = null;
+      try {
+        worker = new Worker(this.inlineWorkerCode(), { eval: true });
+      } catch {}
+
+      if (!worker) {
+        // Fallback: operate without workers; hasher will use in-process hashing
+        securityEvents.emitSecurityEvent('worker_inline_unavailable', {});
+        this.destroyed = true;
+        return;
+      }
+
       worker.on('message', (msg: any) => this.handleMessage(worker, msg));
       worker.on('error', err => {
         securityEvents.emitSecurityEvent('worker_error', { error: err.message });
@@ -1262,16 +1347,18 @@ export async function verifyAndCheckRehash(
 
   if (result.valid && result.needsRehash && options.updateHash) {
     try {
-      const newHash = await hasher.hash(password, { 
+      // Explicitly choose preferred algorithm and avoid rate-limit consumption during rehash
+      const algorithm = process.env.AUTHRIX_HASH_ALGO === 'bcrypt' ? 'bcrypt' : 'argon2id';
+      const newHash = await hasher.hash(password, {
         skipValidation: true,
-        identifier: options.identifier 
+        algorithm,
       });
       metricsCollector?.recordRehash();
       return { ...result, newHash };
     } catch (error) {
       // Log but don't fail verification if rehash fails
-      securityEvents.emitSecurityEvent('rehash_failed', { 
-        error: error instanceof Error ? error.message : 'Unknown error' 
+      securityEvents.emitSecurityEvent('rehash_failed', {
+        error: error instanceof Error ? error.message : 'Unknown error',
       });
       return result;
     }

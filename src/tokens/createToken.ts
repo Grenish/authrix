@@ -1,4 +1,4 @@
-import * as jwt from "jsonwebtoken";
+import jwt from "jsonwebtoken";
 import { authConfig } from "../config";
 
 export function createToken(payload: any) {

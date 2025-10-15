@@ -172,7 +172,17 @@ Access at runtime via `auth.config` (read-only snapshot / accessor pattern) if n
 - AUTHRIX_PASSWORD_PEPPER (required in production)
   - Additional secret applied during password hashing to harden stored hashes.
   - Production: must be set explicitly. The library throws on startup if missing.
-  - Development: if not set, Authrix derives a stable pepper from `jwtSecret` when available; if `jwtSecret` is not yet initialized, a temporary pepper is generated and later upgraded once `jwtSecret` is set. Always configure a real pepper before deploying.
+  - Development: strongly recommended to set as well to avoid any runtime switching.
+
+How to set a stable pepper (Linux/macOS bash)
+- Generate without printing and export it for the current shell session:
+  - PEPPER=$(openssl rand -hex 32)
+  - export AUTHRIX_PASSWORD_PEPPER="$PEPPER"
+- Optionally persist to a local .env (ignored by git):
+  - printf "AUTHRIX_PASSWORD_PEPPER=%s\n" "$PEPPER" >> .env
+  - Load it in your app bootstrap (or via your framework) using dotenv.
+
+Note: Never commit .env with real secrets. Prefer your platform’s secret manager in production.
 
 Notes
 - Keep both secrets in a secure secret store (not in source control).
